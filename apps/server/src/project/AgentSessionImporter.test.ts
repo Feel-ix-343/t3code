@@ -1051,3 +1051,49 @@ it.effect("repeated imports reach linked-worktree sessions behind the scan budge
     expect(oldest.worktreePath).toBe(worktree);
   }).pipe(Effect.scoped, Effect.provide(Layer.merge(persistence, NodeServices.layer))),
 );
+
+it.effect("nests Claude sessions the desktop app spawned, and links earlier imports", () =>
+  Effect.gen(function* () {
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const claude = (id: string) => candidate(CLAUDE_MODEL_SELECTION, id, "claudeAgent");
+    const parent = claude("11111111-1111-4111-8111-111111111111");
+    const spawned = {
+      ...claude("22222222-2222-4222-8222-222222222222"),
+      claudeDesktop: { parentSessionId: parent.source.providerSessionId, sideChat: false },
+    };
+    const sideChat = {
+      ...claude("33333333-3333-4333-8333-333333333333"),
+      claudeDesktop: { parentSessionId: parent.source.providerSessionId, sideChat: true },
+    };
+    const earlier = claude("44444444-4444-4444-8444-444444444444");
+    const first = yield* makeImporter([parent, spawned, sideChat, earlier]);
+    expect(yield* first.run).toEqual({ importedCount: 4, skippedCount: 0 });
+
+    const lineageOf = (source: ReturnType<typeof candidate>) =>
+      projections.getThread(importId(source)).pipe(Effect.map((thread) => thread.lineage));
+    expect(yield* lineageOf(spawned)).toEqual({
+      parentThreadId: null,
+      relationshipToParent: null,
+      rootThreadId: importId(spawned),
+      spawnedBy: importId(parent),
+    });
+    expect(yield* lineageOf(sideChat)).toEqual({
+      parentThreadId: importId(parent),
+      relationshipToParent: "fork",
+      rootThreadId: importId(parent),
+      sideChat: true,
+    });
+    expect((yield* lineageOf(earlier)).spawnedBy).toBeUndefined();
+
+    // The desktop app names a parent only after the first import.
+    const again = yield* makeImporter([
+      {
+        _tag: "AlreadyImported",
+        source: earlier.source,
+        claudeDesktop: { parentSessionId: parent.source.providerSessionId, sideChat: false },
+      },
+    ]);
+    expect(yield* again.run).toEqual({ importedCount: 0, skippedCount: 0 });
+    expect((yield* lineageOf(earlier)).spawnedBy).toBe(importId(parent));
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);

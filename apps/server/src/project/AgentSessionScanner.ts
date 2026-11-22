@@ -45,6 +45,7 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { piHome, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import { type ClaudeDesktopLineage, readClaudeDesktopLineage } from "./ClaudeDesktopSessions.ts";
 import {
   createTranscriptJsonReader,
   createTranscriptJsonSelector,
@@ -226,8 +227,13 @@ export type AgentSessionRecentThread =
       readonly source: AgentSessionImportSource;
       /** The root's linked worktree the session ran in, or null when it ran in the root. */
       readonly worktree: { readonly path: string; readonly branch: string | null } | null;
+      readonly claudeDesktop?: ClaudeDesktopLineage;
     }
-  | { readonly _tag: "AlreadyImported"; readonly source: AgentSessionImportSource }
+  | {
+      readonly _tag: "AlreadyImported";
+      readonly source: AgentSessionImportSource;
+      readonly claudeDesktop?: ClaudeDesktopLineage;
+    }
   | { readonly _tag: "Duplicate"; readonly source: AgentSessionImportSource }
   | { readonly _tag: "Skipped" };
 
@@ -2062,6 +2068,19 @@ export const make = Effect.gen(function* () {
       cachedCandidates = yield* collectCandidates();
     }
     const { candidates } = cachedCandidates;
+    let desktopLineage: ReadonlyMap<string, ClaudeDesktopLineage> | undefined;
+    // Read once per import, and only when a Claude session needs it.
+    const claudeDesktopFields = Effect.fn("AgentSessionScanner.claudeDesktopFields")(function* (
+      source: AgentSessionImportSource,
+    ) {
+      if (source.provider !== "claudeAgent") return {};
+      desktopLineage ??= yield* readClaudeDesktopLineage(homeDir, platform).pipe(
+        Effect.provideService(FileSystem.FileSystem, fileSystem),
+        Effect.provideService(Path.Path, path),
+      );
+      const claudeDesktop = desktopLineage.get(source.providerSessionId);
+      return claudeDesktop === undefined ? {} : { claudeDesktop };
+    });
 
     // The scan counts a linked worktree's sessions toward its main checkout, so import them with it.
     const candidateDirectories = candidates.flatMap((candidate) => {
@@ -2218,6 +2237,7 @@ export const make = Effect.gen(function* () {
             return Option.some<AgentSessionRecentThread>({
               _tag: "AlreadyImported",
               source: completedSource,
+              ...(yield* claudeDesktopFields(completedSource)),
             });
           }
           if (
@@ -2310,6 +2330,7 @@ export const make = Effect.gen(function* () {
               savedTitle === undefined ? parsedThread : { ...parsedThread, title: savedTitle },
             source,
             worktree,
+            ...(yield* claudeDesktopFields(source)),
           });
         }).pipe(importReadLock.withPermits(1)),
       ),

@@ -17,6 +17,7 @@ import {
   type AgentSessionImportInput,
   type AgentSessionImportResult,
   type OrchestrationV2AppThread,
+  type OrchestrationV2AppThreadLineage,
   type OrchestrationV2ConversationMessage,
   type OrchestrationV2DomainEvent,
   type OrchestrationV2ProviderThread,
@@ -41,6 +42,7 @@ import * as ThreadCommandExecutor from "../orchestration-v2/ThreadCommandExecuto
 import * as ProviderSessionRuntime from "../persistence/ProviderSessionRuntime.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as AgentSessionScanner from "./AgentSessionScanner.ts";
+import type { ClaudeDesktopLineage } from "./ClaudeDesktopSessions.ts";
 import * as ProjectService from "./ProjectService.ts";
 
 const isProjectionStoreThreadNotFoundError = Schema.is(
@@ -100,6 +102,32 @@ export function isNativeHistoryPending(input: {
 }): boolean {
   return input.historyOrigin !== "v1_import" && !input.hasRun;
 }
+
+/**
+ * An imported Claude session the desktop app spawned from another nests under that session's
+ * thread; a "btw" side chat stays inside it, as in the desktop app.
+ */
+function importedThreadLineage(input: {
+  readonly threadId: ThreadId;
+  readonly providerInstanceId: string;
+  readonly claudeDesktop: ClaudeDesktopLineage | undefined;
+}): OrchestrationV2AppThreadLineage {
+  const own = { parentThreadId: null, relationshipToParent: null, rootThreadId: input.threadId };
+  if (input.claudeDesktop === undefined) return own;
+  const parent = ThreadId.make(
+    `import:${input.providerInstanceId}:${input.claudeDesktop.parentSessionId}`,
+  );
+  return input.claudeDesktop.sideChat
+    ? { parentThreadId: parent, relationshipToParent: "fork", rootThreadId: parent, sideChat: true }
+    : { ...own, spawnedBy: parent };
+}
+
+const sameLineage = (a: OrchestrationV2AppThreadLineage, b: OrchestrationV2AppThreadLineage) =>
+  a.parentThreadId === b.parentThreadId &&
+  a.relationshipToParent === b.relationshipToParent &&
+  a.rootThreadId === b.rootThreadId &&
+  (a.sideChat ?? false) === (b.sideChat ?? false) &&
+  a.spawnedBy === b.spawnedBy;
 
 function dateTime(value: string): DateTime.Utc {
   return DateTime.makeUnsafe(value);
@@ -205,6 +233,40 @@ const make = Effect.gen(function* () {
   const threadCommands = yield* ThreadCommandExecutor.ThreadCommandExecutor;
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const ceiling = settingsService.managedPolicy?.limits?.maxRuntimeMode;
+  // Links an earlier import to the parent the desktop app now names; never unlinks one.
+  const linkImportedThread = Effect.fn("AgentSessionImporter.linkImportedThread")(function* (
+    threadId: ThreadId,
+    providerInstanceId: string,
+    claudeDesktop: ClaudeDesktopLineage | undefined,
+  ) {
+    if (claudeDesktop === undefined) return;
+    const lineage = importedThreadLineage({ threadId, providerInstanceId, claudeDesktop });
+    yield* threadCommands
+      .withLock(
+        threadId,
+        Effect.gen(function* () {
+          const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
+          if (thread.historyOrigin !== "v1_import" || sameLineage(thread.lineage, lineage)) return;
+          yield* eventSink.write({
+            events: [
+              {
+                id: yield* idAllocator.allocate.event({ threadId }),
+                type: "thread.metadata-updated",
+                threadId,
+                providerInstanceId: thread.providerInstanceId,
+                occurredAt: yield* DateTime.now,
+                payload: { ...thread, lineage },
+              },
+            ],
+          });
+        }),
+      )
+      .pipe(
+        Effect.catchCause((cause) =>
+          Effect.logWarning("Could not link an imported agent session", { threadId, cause }),
+        ),
+      );
+  });
   const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
     input: AgentSessionImportInput,
   ) {
@@ -279,6 +341,7 @@ const make = Effect.gen(function* () {
         );
         if (outcome._tag === "AlreadyImported") {
           importedThreadIds.add(threadId);
+          yield* linkImportedThread(threadId, source.providerInstanceId, outcome.claudeDesktop);
           return;
         }
         if (outcome._tag === "Duplicate") {
@@ -349,6 +412,7 @@ const make = Effect.gen(function* () {
             }
             yield* persistRuntime;
             yield* runtimes.recordImportedTranscript({ threadId, source });
+            yield* linkImportedThread(threadId, source.providerInstanceId, outcome.claudeDesktop);
             importedThreadIds.add(threadId);
             return null;
           }
@@ -377,11 +441,11 @@ const make = Effect.gen(function* () {
             branchPullRequest: null,
             activeProviderThreadId: providerThreadId,
             historyOrigin: "v1_import",
-            lineage: {
-              parentThreadId: null,
-              relationshipToParent: null,
-              rootThreadId: threadId,
-            },
+            lineage: importedThreadLineage({
+              threadId,
+              providerInstanceId: source.providerInstanceId,
+              claudeDesktop: outcome.claudeDesktop,
+            }),
             forkedFrom: null,
             createdAt,
             updatedAt,
