@@ -188,6 +188,7 @@ import { sortFolderThreads } from "@t3tools/client-runtime/state/thread-inbox";
 import {
   mergeSidebarSections,
   moveSidebarSection,
+  dropStaysInOwnList,
   planSidebarArrangeDrop,
   resolveSidebarArrangeTarget,
   type SidebarArrangeItem,
@@ -996,6 +997,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     turnThreadIntoProject,
     reorderPinnedThread,
     reorderActiveThread,
+    setThreadNestParent,
     markThreadUnread,
     archiveThread,
     deleteThread,
@@ -2122,6 +2124,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     // Update the local list too; threadByKey already omits rows moved into collapsed shelves.
     sidebarListItems = sidebarListItemsFresh;
   }
+  // Rows shown under the thread they nest in; dragging one anywhere unnests it.
+  const nestedThreadKeys = new Set(
+    sidebarListItems.flatMap((item) =>
+      item.kind === "thread" && (item.nest?.depth ?? 0) > 0 ? [item.key] : [],
+    ),
+  );
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels the dnd-kit drag sensor when the dragged row leaves the list
   useEffect(() => {
     if (
@@ -2201,15 +2209,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       : inFolder
         ? (folder?.threads ?? EMPTY_THREADS)
         : EMPTY_THREADS;
+    const dragged = {
+      key: activeKey,
+      pinned,
+      sectionId,
+      folderKey: pinned || inFolder ? (folder?.group.projectKey ?? null) : null,
+    };
     return {
       target,
+      thread: dragged,
       plan: planSidebarArrangeDrop({
-        thread: {
-          key: activeKey,
-          pinned,
-          sectionId,
-          folderKey: pinned || inFolder ? (folder?.group.projectKey ?? null) : null,
-        },
+        thread: dragged,
         target,
         sourceOrder: sourceThreads.map(threadShellKey),
         pinKeysById: pinnedKeysById,
@@ -2423,12 +2433,29 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       })();
     },
   );
+  const unnestThread = async (threadRef: ScopedThreadRef) =>
+    !reportArrangeFailure(
+      await setThreadNestParent(threadRef, null),
+      gt("Failed to unnest thread"),
+    );
+  /** A nested row dropped back into its own list unnests even where its order cannot change. */
+  const unnestsInPlace = (activeKey: string, overId: string) => {
+    if (overId === activeKey || !nestedThreadKeys.has(activeKey)) return false;
+    const arranged = planArrangeDrop(activeKey, overId);
+    return arranged !== null && dropStaysInOwnList(arranged.thread, arranged.target);
+  };
   const arrangeThread = (activeKey: string, overId: string) => {
     const arranged = planArrangeDrop(activeKey, overId);
     const thread = threadByKey.get(activeKey);
     if (arranged === null || thread === undefined) return;
     const { plan } = arranged;
-    if (plan.kind === "none") return;
+    const unnests = nestedThreadKeys.has(activeKey);
+    if (plan.kind === "none") {
+      if (unnestsInPlace(activeKey, overId) && checkThreadOperations([thread])) {
+        void unnestThread(scopeThreadRef(thread.environmentId, thread.id));
+      }
+      return;
+    }
     const keyed = plan.kind === "pin" ? plan.others : plan.assignments;
     const touched = [activeKey, ...keyed.map(({ id }) => id)].flatMap((key) => {
       const candidate = threadByKey.get(key);
@@ -2440,11 +2467,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       return candidate ? scopeThreadRef(candidate.environmentId, candidate.id) : null;
     };
     const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-    void (async () => {
+    const place = async (): Promise<boolean> => {
       switch (plan.kind) {
         case "pin": {
           if (plan.sectionId !== null && !(await ensureSidebarSection(thread, plan.sectionId)))
-            return;
+            return false;
           const results = await Promise.all([
             pinThread(threadRef, { orderKey: plan.orderKey, sectionId: plan.sectionId }),
             ...plan.others.flatMap(({ id, orderKey }) => {
@@ -2452,12 +2479,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
               return ref ? [reorderPinnedThread(ref, orderKey)] : [];
             }),
           ]);
-          results.some((result) => reportArrangeFailure(result, gt("Failed to pin thread")));
-          return;
+          return !results.some((result) =>
+            reportArrangeFailure(result, gt("Failed to pin thread")),
+          );
         }
         case "reorder-pinned": {
           if (plan.sectionId !== null && !(await ensureSidebarSection(thread, plan.sectionId)))
-            return;
+            return false;
           const results = await Promise.all(
             plan.assignments.flatMap(({ id, orderKey }) => {
               const ref = refOf(id);
@@ -2472,29 +2500,30 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 : [];
             }),
           );
-          results.some((result) =>
+          return !results.some((result) =>
             reportArrangeFailure(result, gt("Failed to reorder pinned threads")),
           );
-          return;
         }
         case "reorder-folder": {
           if (
             plan.unpin &&
             reportArrangeFailure(await unpinThread(threadRef), gt("Failed to unpin thread"))
           )
-            return;
+            return false;
           const results = await Promise.all(
             plan.assignments.flatMap(({ id, orderKey }) => {
               const ref = refOf(id);
               return ref ? [reorderActiveThread(ref, orderKey)] : [];
             }),
           );
-          results.some((result) =>
+          return !results.some((result) =>
             reportArrangeFailure(result, gt("Failed to reorder active threads")),
           );
-          return;
         }
       }
+    };
+    void (async () => {
+      if ((await place()) && unnests) await unnestThread(threadRef);
     })();
   };
   const handleThreadDragOver = (event: DragOverEvent) => {
@@ -2562,7 +2591,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       return createSidebarCollisionDetection((id) =>
         activeKey === undefined
           ? true
-          : (planArrangeDrop(activeKey, id)?.plan.kind ?? "none") !== "none",
+          : (planArrangeDrop(activeKey, id)?.plan.kind ?? "none") !== "none" ||
+            unnestsInPlace(activeKey, id),
       );
     }
     if (draggedThreadKey === undefined || draggedFromSection === undefined)
@@ -2724,6 +2754,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         case "reorder-pinned":
           break;
       }
+      if (nestedThreadKeys.has(activeKey) && !(await unnestThread(threadRef))) return;
       const keyWrites = plan.kind === "pin" ? plan.extraAssignments : plan.assignments;
       for (const assignment of keyWrites) {
         const thread = threadByKey.get(assignment.id);

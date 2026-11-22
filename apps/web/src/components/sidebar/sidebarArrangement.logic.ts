@@ -94,6 +94,26 @@ export type SidebarArrangePlan =
       readonly assignments: readonly KeyAssignment[];
     };
 
+function arrangeSource(thread: SidebarArrangeThread): SidebarArrangeContainer | null {
+  return thread.pinned
+    ? { kind: "pinned", sectionId: thread.sectionId }
+    : thread.folderKey === null
+      ? null
+      : { kind: "folder", projectKey: thread.folderKey };
+}
+
+/**
+ * Whether a drop lands in the dragged row's own list. A nested row dropped there unnests even
+ * when its order cannot change, since nesting is what placed it.
+ */
+export function dropStaysInOwnList(
+  thread: SidebarArrangeThread,
+  target: SidebarArrangeTarget,
+): boolean {
+  const source = arrangeSource(thread);
+  return source !== null && sameArrangeContainer(source, target.container);
+}
+
 export function planSidebarArrangeDrop(input: {
   readonly thread: SidebarArrangeThread;
   readonly target: SidebarArrangeTarget;
@@ -103,14 +123,8 @@ export function planSidebarArrangeDrop(input: {
   readonly activeKeysById: ReadonlyMap<string, string | null | undefined>;
 }): SidebarArrangePlan {
   const { thread, target } = input;
-  const source: SidebarArrangeContainer | null = thread.pinned
-    ? { kind: "pinned", sectionId: thread.sectionId }
-    : thread.folderKey === null
-      ? null
-      : { kind: "folder", projectKey: thread.folderKey };
   const unchanged =
-    source !== null &&
-    sameArrangeContainer(source, target.container) &&
+    dropStaysInOwnList(thread, target) &&
     target.order.length === input.sourceOrder.length &&
     target.order.every((key, index) => input.sourceOrder[index] === key);
   if (unchanged) return { kind: "none" };

@@ -50,6 +50,7 @@ import {
   reorderPinnedThread,
   reorderActiveThread,
   setThreadAutoSettle,
+  setThreadNestParent,
   settleThread,
   snoozeThread,
   startThreadTurn,
@@ -280,6 +281,12 @@ export function createThreadEnvironmentAtoms<R, E>(
     reorderActive: createEnvironmentCommand(runtime, {
       label: "environment-data:commands:thread:reorder-active",
       execute: reorderActiveThread,
+      scheduler,
+      concurrency,
+    }),
+    setNestParent: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:set-nest-parent",
+      execute: setThreadNestParent,
       scheduler,
       concurrency,
     }),

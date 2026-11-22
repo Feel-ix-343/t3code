@@ -133,6 +133,11 @@ export interface ReorderActiveThreadInput extends ThreadCommandInput {
   readonly orderKey: string;
 }
 
+export interface SetThreadNestParentInput extends ThreadCommandInput {
+  /** The thread to nest under, or null to keep this one unnested. */
+  readonly parentThreadId: ThreadId | null;
+}
+
 export interface SnoozeThreadInput extends ThreadCommandInput {
   readonly snoozedUntil: string;
 }
@@ -641,6 +646,17 @@ export const reorderActiveThread = Effect.fn("EnvironmentCommands.reorderActiveT
     commandId: yield* allocateCommandId(input),
     threadId: input.threadId,
     orderKey: input.orderKey,
+  });
+});
+
+export const setThreadNestParent = Effect.fn("EnvironmentCommands.setThreadNestParent")(function* (
+  input: SetThreadNestParentInput,
+) {
+  return yield* dispatch({
+    type: "thread.nest.set",
+    commandId: yield* allocateCommandId(input),
+    threadId: input.threadId,
+    parentThreadId: input.parentThreadId,
   });
 });
 

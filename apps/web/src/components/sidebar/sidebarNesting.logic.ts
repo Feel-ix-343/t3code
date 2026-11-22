@@ -1,12 +1,15 @@
-import type { OrchestrationV2AppThreadLineage, ThreadId } from "@t3tools/contracts";
+import {
+  type OrchestrationV2AppThreadLineage,
+  type ThreadId,
+  threadNestParentId,
+} from "@t3tools/contracts";
 
-/** The thread another one was launched or forked from, which the sidebar nests it under. */
+/**
+ * The thread the sidebar nests another under: the one it was placed under, else the one it was
+ * launched or forked from. A thread unnested by hand has none.
+ */
 export function sidebarNestParentId(lineage: OrchestrationV2AppThreadLineage): ThreadId | null {
-  if (lineage.spawnedBy !== undefined) return lineage.spawnedBy;
-  if (lineage.relationshipToParent === "fork" && lineage.sideChat !== true) {
-    return lineage.parentThreadId;
-  }
-  return null;
+  return threadNestParentId(lineage);
 }
 
 export interface SidebarNestedRow<T> {

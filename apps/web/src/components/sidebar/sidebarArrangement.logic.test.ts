@@ -3,6 +3,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   mergeSidebarSections,
   moveSidebarSection,
+  dropStaysInOwnList,
   planSidebarArrangeDrop,
   resolveSidebarArrangeTarget,
   type SidebarArrangeItem,
@@ -165,5 +166,38 @@ describe("sidebar sections", () => {
   it("moves a section before another or to the end", () => {
     expect(moveSidebarSection([work, home, misc], "misc", "work")).toEqual([misc, work, home]);
     expect(moveSidebarSection([work, home, misc], "work", null)).toEqual([home, misc, work]);
+  });
+});
+
+describe("dropStaysInOwnList", () => {
+  const pinnedIn = (sectionId: string | null) => ({
+    key: "child",
+    pinned: true,
+    sectionId,
+    folderKey: "project",
+  });
+  const active = { key: "child", pinned: false, sectionId: null, folderKey: "project" };
+  const target = (container: Parameters<typeof dropStaysInOwnList>[1]["container"]) => ({
+    container,
+    order: ["child"],
+  });
+
+  it("is the thread's own pinned list or project folder", () => {
+    expect(
+      dropStaysInOwnList(pinnedIn("work"), target({ kind: "pinned", sectionId: "work" })),
+    ).toBe(true);
+    expect(dropStaysInOwnList(pinnedIn(null), target({ kind: "pinned", sectionId: "work" }))).toBe(
+      false,
+    );
+    expect(dropStaysInOwnList(active, target({ kind: "folder", projectKey: "project" }))).toBe(
+      true,
+    );
+    expect(dropStaysInOwnList(active, target({ kind: "folder", projectKey: "other" }))).toBe(false);
+    expect(
+      dropStaysInOwnList(
+        { ...active, folderKey: null },
+        target({ kind: "folder", projectKey: "project" }),
+      ),
+    ).toBe(false);
   });
 });

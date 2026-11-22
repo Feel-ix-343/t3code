@@ -78,3 +78,26 @@ describe("sidebarNestParentId", () => {
     ).toBeNull();
   });
 });
+
+describe("sidebarNestParentId placement", () => {
+  const spawner = ThreadId.make("spawner");
+  const chosen = ThreadId.make("chosen");
+  const lineage = {
+    parentThreadId: null,
+    relationshipToParent: null,
+    rootThreadId: ThreadId.make("self"),
+    spawnedBy: spawner,
+  } as const;
+  it("follows where the thread was placed over the thread that spawned it", () => {
+    expect(sidebarNestParentId({ ...lineage, nestParentThreadId: null })).toBeNull();
+    expect(sidebarNestParentId({ ...lineage, nestParentThreadId: chosen })).toBe(chosen);
+    expect(
+      sidebarNestParentId({
+        parentThreadId: null,
+        relationshipToParent: null,
+        rootThreadId: ThreadId.make("self"),
+        nestParentThreadId: chosen,
+      }),
+    ).toBe(chosen);
+  });
+});

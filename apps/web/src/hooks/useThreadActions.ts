@@ -331,6 +331,9 @@ export function useThreadActions() {
   const reorderActiveThreadMutation = useOrchestrationCommand(threadEnvironment.reorderActive, {
     reportFailure: false,
   });
+  const setThreadNestParentMutation = useOrchestrationCommand(threadEnvironment.setNestParent, {
+    reportFailure: false,
+  });
   const snoozeThreadMutation = useOrchestrationCommand(threadEnvironment.snooze, {
     reportFailure: false,
   });
@@ -948,6 +951,13 @@ export function useThreadActions() {
     });
   };
 
+  /** Nests the thread under `parentThreadId` in thread lists, or with null unnests it. */
+  const setThreadNestParent = (target: ScopedThreadRef, parentThreadId: ThreadId | null) =>
+    setThreadNestParentMutation({
+      environmentId: target.environmentId,
+      input: { threadId: target.threadId, parentThreadId },
+    });
+
   const unsnoozeThread = async (target: ScopedThreadRef) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
@@ -1074,6 +1084,7 @@ export function useThreadActions() {
     confirmAndUnpinThread,
     reorderPinnedThread,
     reorderActiveThread,
+    setThreadNestParent,
     markThreadUnread,
     setThreadAutoSettle,
     turnThreadIntoProject: (target: ScopedThreadRef) =>
