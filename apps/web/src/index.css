@@ -2658,3 +2658,13 @@ code {
 .messages-timeline-scroll:focus-visible {
   outline: none;
 }
+
+/* Sidebar type runs 20% smaller than the rest of the app. Tailwind v4 text
+   utilities read these variables, so overriding them here scales every
+   text-* class inside the sidebar without touching each component. */
+[data-sidebar="sidebar"] {
+  --text-xs: 0.6rem;
+  --text-sm: 0.7rem;
+  --text-base: 0.8rem;
+  --text-lg: 0.9rem;
+}
