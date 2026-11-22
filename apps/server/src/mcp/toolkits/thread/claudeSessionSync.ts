@@ -173,33 +173,35 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
         ];
 
   const projectReports = yield* Effect.forEach(projects, (project) =>
-    importer.importAgentThreads({ projectId: project.id }, { dryRun }).pipe(
-      Effect.map((report) => ({
-        projectId: project.id,
-        title: project.title,
-        imported: report.imported.length,
-        refreshed: report.refreshed.length,
-        unchanged: report.unchangedCount,
-        nested: report.linked.length,
-        skipped: report.skipped,
-        importedThreadIds: report.imported,
-        refreshedThreadIds: report.refreshed,
-      })),
-      Effect.catch((error) =>
-        Effect.succeed({
+    importer
+      .importAgentThreads({ projectId: project.id }, { dryRun, onlySources: [CLAUDE_PROVIDER] })
+      .pipe(
+        Effect.map((report) => ({
           projectId: project.id,
           title: project.title,
-          imported: 0,
-          refreshed: 0,
-          unchanged: 0,
-          nested: 0,
-          skipped: {},
-          importedThreadIds: [] as ReadonlyArray<ThreadId>,
-          refreshedThreadIds: [] as ReadonlyArray<ThreadId>,
-          error: error.message,
-        }),
+          imported: report.imported.length,
+          refreshed: report.refreshed.length,
+          unchanged: report.unchangedCount,
+          nested: report.linked.length,
+          skipped: report.skipped,
+          importedThreadIds: report.imported,
+          refreshedThreadIds: report.refreshed,
+        })),
+        Effect.catch((error) =>
+          Effect.succeed({
+            projectId: project.id,
+            title: project.title,
+            imported: 0,
+            refreshed: 0,
+            unchanged: 0,
+            nested: 0,
+            skipped: {},
+            importedThreadIds: [] as ReadonlyArray<ThreadId>,
+            refreshedThreadIds: [] as ReadonlyArray<ThreadId>,
+            error: error.message,
+          }),
+        ),
       ),
-    ),
   );
 
   const organization = yield* scanner.claudeDesktopOrganization;

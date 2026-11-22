@@ -489,7 +489,10 @@ const make = Effect.gen(function* () {
    */
   const importAgentThreads = Effect.fn("importAgentThreadsV2")(function* (
     input: AgentSessionImportInput,
-    options: { readonly dryRun?: boolean } = {},
+    options: {
+      readonly dryRun?: boolean;
+      readonly onlySources?: ReadonlyArray<"claudeAgent" | "codex">;
+    } = {},
   ) {
     const dryRun = options.dryRun === true;
     const project = yield* projects.getById(input.projectId).pipe(
@@ -546,7 +549,11 @@ const make = Effect.gen(function* () {
         ),
       );
     })).flat();
-    const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources);
+    const outcomes = scanner.recentThreads(
+      project.workspaceRoot,
+      completedSources,
+      options.onlySources,
+    );
     const importedThreadIds = new Set<ThreadId>();
     const imported: ThreadId[] = [];
     const refreshed: ThreadId[] = [];

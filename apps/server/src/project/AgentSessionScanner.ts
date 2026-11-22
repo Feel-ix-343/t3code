@@ -249,6 +249,7 @@ export class AgentSessionScanner extends Context.Service<
     readonly recentThreads: (
       workspaceRoot: string,
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
+      onlySources?: ReadonlyArray<AgentSessionSource>,
     ) => Stream.Stream<AgentSessionRecentThread, AgentSessionScanError>;
     /** The Claude desktop app's sidebar sections and starred sessions (macOS; else empty). */
     readonly claudeDesktopOrganization: Effect.Effect<ClaudeDesktopOrganization>;
@@ -2062,6 +2063,7 @@ export const make = Effect.gen(function* () {
   const prepareRecentThreads = Effect.fn("AgentSessionScanner.prepareRecentThreads")(function* (
     workspaceRoot: string,
     completedSources: ReadonlyArray<AgentSessionImportSource>,
+    onlySources: ReadonlyArray<AgentSessionSource> | undefined,
   ) {
     const root = path.resolve(expandHomePath(workspaceRoot, homeDir));
     const realRoot = yield* fileSystem.realPath(root).pipe(Effect.orElseSucceed(() => root));
@@ -2095,9 +2097,30 @@ export const make = Effect.gen(function* () {
       return path.isAbsolute(expanded) ? [path.resolve(expanded)] : [];
     });
     const directoryProjects = yield* resolveDirectoryProjects(candidateDirectories);
-    const belongsToRoot = Effect.fn("AgentSessionScanner.belongsToRoot")(function* (
+    // Sessions often run in a subdirectory of a checkout; count them toward the
+    // nearest enclosing directory that holds a .git entry.
+    const gitRoots = new Map<string, string>();
+    const nearestGitRoot = Effect.fn("AgentSessionScanner.nearestGitRoot")(function* (
       resolved: string,
     ) {
+      const known = gitRoots.get(resolved);
+      if (known !== undefined) return known;
+      let found = resolved;
+      for (let current = resolved; ;) {
+        if (Option.isSome(yield* statOption(path.join(current, ".git")))) {
+          found = current;
+          break;
+        }
+        const parent = path.dirname(current);
+        if (parent === current) break;
+        current = parent;
+      }
+      gitRoots.set(resolved, found);
+      return found;
+    });
+    const belongsToRoot = Effect.fn("AgentSessionScanner.belongsToRoot")(function* (cwd: string) {
+      if ((yield* directoryIdentity(cwd)) === rootIdentity) return true;
+      const resolved = yield* nearestGitRoot(cwd);
       if ((yield* directoryIdentity(resolved)) === rootIdentity) return true;
       if (!directoryProjects.has(resolved)) {
         const project = (yield* resolveDirectoryProjects([resolved])).get(resolved) ?? null;
@@ -2106,9 +2129,8 @@ export const make = Effect.gen(function* () {
       return directoryProjects.get(resolved)?.key === rootIdentity;
     });
     const worktreesByDirectory = new Map<string, { path: string; branch: string | null } | null>();
-    const rootWorktree = Effect.fn("AgentSessionScanner.rootWorktree")(function* (
-      resolved: string,
-    ) {
+    const rootWorktree = Effect.fn("AgentSessionScanner.rootWorktree")(function* (cwd: string) {
+      const resolved = yield* nearestGitRoot(cwd);
       const known = worktreesByDirectory.get(resolved);
       if (known !== undefined) return known;
       const gitDir =
@@ -2133,6 +2155,7 @@ export const make = Effect.gen(function* () {
       readonly transcript: RawCandidate["transcripts"][number] & { readonly mtimeMs: number };
     }> = [];
     for (const candidate of candidates) {
+      if (onlySources !== undefined && !onlySources.includes(candidate.source)) continue;
       const expanded = expandHomePath(candidate.cwd.trim(), homeDir);
       if (!path.isAbsolute(expanded)) continue;
       const resolved = path.resolve(expanded);
@@ -2349,7 +2372,8 @@ export const make = Effect.gen(function* () {
   const recentThreads: AgentSessionScanner["Service"]["recentThreads"] = (
     workspaceRoot,
     completedSources = [],
-  ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources));
+    onlySources,
+  ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources, onlySources));
 
   const claudeDesktopOrganization = readClaudeDesktopOrganization(homeDir, platform).pipe(
     Effect.provideService(FileSystem.FileSystem, fileSystem),
