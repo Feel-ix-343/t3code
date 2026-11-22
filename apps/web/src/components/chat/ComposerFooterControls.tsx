@@ -226,6 +226,8 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
   hideCompactToggle: boolean;
   keepFullHistory: boolean;
   onToggleKeepFullHistory: () => void;
+  /** Hide the disabled send button while the composer is empty (the mic stands in for it). */
+  collapseSendWhenEmpty?: boolean;
 }) {
   return (
     <>
@@ -257,6 +259,7 @@ export const ComposerFooterPrimaryActions = memo(function ComposerFooterPrimaryA
         hideCompactToggle={props.hideCompactToggle}
         keepFullHistory={props.keepFullHistory}
         onToggleKeepFullHistory={props.onToggleKeepFullHistory}
+        collapseSendWhenEmpty={props.collapseSendWhenEmpty ?? false}
       >
         {props.children}
       </ComposerPrimaryActions>

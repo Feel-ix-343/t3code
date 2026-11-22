@@ -69,6 +69,8 @@ interface ComposerPrimaryActionsProps {
   hideCompactToggle?: boolean;
   keepFullHistory?: boolean;
   onToggleKeepFullHistory?: () => void;
+  /** Hide the disabled send button while there is nothing to send, as the mic stands in for it. */
+  collapseSendWhenEmpty?: boolean;
 }
 
 const formatPendingPrimaryActionLabel = (
@@ -262,6 +264,7 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
   hideCompactToggle = false,
   keepFullHistory = false,
   onToggleKeepFullHistory,
+  collapseSendWhenEmpty = false,
 }: ComposerPrimaryActionsProps) {
   const gt = useGT();
   const m = useMessages();
@@ -495,7 +498,23 @@ export const ComposerPrimaryActions = memo(function ComposerPrimaryActions({
 
   const submit = (
     <Tooltip key="submit">
-      <TooltipTrigger render={<span className="inline-flex" />}>{sendButton}</TooltipTrigger>
+      <TooltipTrigger
+        render={
+          <span
+            className={cn(
+              "inline-flex",
+              collapseSendWhenEmpty &&
+                !hasSendableContent &&
+                !showResume &&
+                !isBusyOrHeld &&
+                !isRunning &&
+                "hidden",
+            )}
+          />
+        }
+      >
+        {sendButton}
+      </TooltipTrigger>
       <TooltipPopup>{submitTooltip}</TooltipPopup>
     </Tooltip>
   );
