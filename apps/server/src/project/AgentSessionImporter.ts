@@ -122,6 +122,7 @@ function importedThreadLineage(input: {
     : { ...own, spawnedBy: parent };
 }
 
+// The placement a person or agent chose is theirs: the import neither compares nor replaces it.
 const sameLineage = (a: OrchestrationV2AppThreadLineage, b: OrchestrationV2AppThreadLineage) =>
   a.parentThreadId === b.parentThreadId &&
   a.relationshipToParent === b.relationshipToParent &&
@@ -131,6 +132,114 @@ const sameLineage = (a: OrchestrationV2AppThreadLineage, b: OrchestrationV2AppTh
 
 function dateTime(value: string): DateTime.Utc {
   return DateTime.makeUnsafe(value);
+}
+
+interface ComparableMessage {
+  readonly role: string;
+  readonly text: string;
+}
+
+/** How an imported thread catches up with its session's transcript. */
+export type ImportedHistoryRefresh =
+  | { readonly kind: "unchanged" }
+  /** `gap`: messages between the thread's last one and `messages` were cut from the transcript read. */
+  | {
+      readonly kind: "append";
+      readonly messages: ReadonlyArray<AgentSessionScanner.AgentSessionThreadMessage>;
+      readonly gap: boolean;
+    }
+  | { readonly kind: "diverged" };
+
+// Enough trailing messages to place the thread's end in a truncated read without a chance match.
+const REFRESH_OVERLAP_MESSAGES = 8;
+
+/**
+ * Plans the messages an imported thread lacks. A read of a long transcript keeps its first user
+ * message and the latest history, so the thread's own last messages place it in that window; a
+ * window that starts after them leaves a gap. Anything else that does not line up is divergence.
+ */
+export function planImportedHistoryRefresh(
+  stored: ReadonlyArray<ComparableMessage & { readonly createdAt?: string | DateTime.Utc }>,
+  incoming: Pick<AgentSessionScanner.AgentSessionThread, "messages" | "omittedMessageCount">,
+): ImportedHistoryRefresh {
+  const same = (left: ComparableMessage, right: ComparableMessage | undefined) =>
+    right !== undefined && left.role === right.role && left.text === right.text;
+  const messages = incoming.messages;
+  if (
+    stored.length <= messages.length &&
+    stored.every((message, i) => same(message, messages[i]))
+  ) {
+    return stored.length === messages.length
+      ? { kind: "unchanged" }
+      : { kind: "append", messages: messages.slice(stored.length), gap: false };
+  }
+  if (incoming.omittedMessageCount === 0 || stored.length < 2 || !same(stored[0]!, messages[0])) {
+    return { kind: "diverged" };
+  }
+  const tail = stored.slice(-Math.min(stored.length - 1, REFRESH_OVERLAP_MESSAGES));
+  const ends: number[] = [];
+  for (let end = tail.length; end < messages.length; end += 1) {
+    if (tail.every((message, i) => same(message, messages[end - tail.length + 1 + i]))) {
+      ends.push(end);
+    }
+  }
+  if (ends.length === 1) {
+    const rest = messages.slice(ends[0]! + 1);
+    return rest.length === 0
+      ? { kind: "unchanged" }
+      : { kind: "append", messages: rest, gap: false };
+  }
+  if (ends.length > 1) return { kind: "diverged" };
+  // No overlap: the window may have moved past everything the thread holds.
+  const lastStored = stored.at(-1)?.createdAt;
+  const lastStoredMs =
+    lastStored === undefined
+      ? Number.NaN
+      : typeof lastStored === "string"
+        ? Date.parse(lastStored)
+        : DateTime.toEpochMillis(lastStored);
+  const recent = messages.slice(1);
+  if (
+    recent.length > 0 &&
+    Number.isFinite(lastStoredMs) &&
+    recent.every((message) => Date.parse(message.createdAt) > lastStoredMs)
+  ) {
+    return { kind: "append", messages: recent, gap: true };
+  }
+  return { kind: "diverged" };
+}
+
+/** The next free history slot: imported message ids end in their zero-padded slot. */
+function nextHistorySlot(threadId: ThreadId, messageIds: ReadonlyArray<string>): number {
+  let next = messageIds.length;
+  for (const id of messageIds) {
+    if (!id.startsWith(`${threadId}:`)) continue;
+    const slot = Number(id.slice(threadId.length + 1));
+    if (Number.isInteger(slot) && slot >= next) next = slot + 1;
+  }
+  return next;
+}
+
+/** Why an import left a session alone. */
+export type AgentSessionImportSkipReason =
+  /** The scan could not read it, or the import budget ran out first. */
+  | "unreadable"
+  | "unresumable"
+  | "other-project"
+  /** Its thread has T3 runs or messages of its own. */
+  | "t3-activity"
+  /** Its transcript no longer starts with the thread's messages. */
+  | "diverged"
+  | "failed";
+
+export interface AgentSessionImportReport {
+  readonly imported: ReadonlyArray<ThreadId>;
+  readonly refreshed: ReadonlyArray<ThreadId>;
+  readonly unchangedCount: number;
+  /** Earlier imports linked to the parent the Claude desktop app names. */
+  readonly linked: ReadonlyArray<ThreadId>;
+  readonly skipped: Partial<Record<AgentSessionImportSkipReason, number>>;
+  readonly skippedCount: number;
 }
 
 type HistoryMessage = Omit<AgentSessionScanner.AgentSessionThreadMessage, "role"> & {
@@ -234,19 +343,25 @@ const make = Effect.gen(function* () {
   const settingsService = yield* ServerSettings.ServerSettingsService;
   const ceiling = settingsService.managedPolicy?.limits?.maxRuntimeMode;
   // Links an earlier import to the parent the desktop app now names; never unlinks one.
+  // Returns whether it changed (or, in a dry run, would change) the thread's lineage.
   const linkImportedThread = Effect.fn("AgentSessionImporter.linkImportedThread")(function* (
     threadId: ThreadId,
     providerInstanceId: string,
     claudeDesktop: ClaudeDesktopLineage | undefined,
+    dryRun = false,
   ) {
-    if (claudeDesktop === undefined) return;
+    if (claudeDesktop === undefined) return false;
     const lineage = importedThreadLineage({ threadId, providerInstanceId, claudeDesktop });
-    yield* threadCommands
+    return yield* threadCommands
       .withLock(
         threadId,
         Effect.gen(function* () {
           const { thread } = yield* orchestrator.getThreadRecords(threadId, []);
-          if (thread.historyOrigin !== "v1_import" || sameLineage(thread.lineage, lineage)) return;
+          if (thread.historyOrigin !== "v1_import" || sameLineage(thread.lineage, lineage)) {
+            return false;
+          }
+          if (dryRun) return true;
+          const placed = thread.lineage.nestParentThreadId;
           yield* eventSink.write({
             events: [
               {
@@ -255,21 +370,128 @@ const make = Effect.gen(function* () {
                 threadId,
                 providerInstanceId: thread.providerInstanceId,
                 occurredAt: yield* DateTime.now,
-                payload: { ...thread, lineage },
+                payload: {
+                  ...thread,
+                  lineage:
+                    placed === undefined ? lineage : { ...lineage, nestParentThreadId: placed },
+                },
               },
             ],
           });
+          return true;
         }),
       )
       .pipe(
         Effect.catchCause((cause) =>
-          Effect.logWarning("Could not link an imported agent session", { threadId, cause }),
+          Effect.logWarning("Could not link an imported agent session", { threadId, cause }).pipe(
+            Effect.as(false),
+          ),
         ),
       );
   });
-  const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
-    input: AgentSessionImportInput,
+  /**
+   * Appends what an imported thread's session gained since: its new messages, title, and
+   * activity time. Holds the thread lock from the read through the write, and leaves a thread
+   * with T3 activity of its own, or whose transcript no longer lines up, alone.
+   */
+  const refreshImportedThread = Effect.fn("AgentSessionImporter.refreshImportedThread")(function* (
+    threadId: ThreadId,
+    thread: AgentSessionScanner.AgentSessionThread,
+    dryRun: boolean,
   ) {
+    return yield* threadCommands.withLock(
+      threadId,
+      Effect.gen(function* () {
+        const records = yield* orchestrator.getThreadRecords(threadId, ["messages", "runs"]);
+        const current = records.thread;
+        if (
+          current.historyOrigin !== "v1_import" ||
+          records.runs.length > 0 ||
+          records.messages.some((message) => message.runId !== null)
+        ) {
+          return "t3-activity" as const;
+        }
+        const plan = planImportedHistoryRefresh(records.messages, thread);
+        if (plan.kind === "diverged") return "diverged" as const;
+        if (plan.kind === "unchanged") return "unchanged" as const;
+        if (dryRun) return "refreshed" as const;
+        const firstSlot = nextHistorySlot(
+          threadId,
+          records.messages.map((message) => message.id),
+        );
+        const gapSlot = plan.gap ? firstSlot : null;
+        const messageSlot = plan.gap ? firstSlot + 1 : firstSlot;
+        const incomingUpdatedAt = dateTime(thread.updatedAt);
+        const updatedAt = DateTime.isGreaterThan(incomingUpdatedAt, current.updatedAt)
+          ? incomingUpdatedAt
+          : current.updatedAt;
+        const title = thread.title.trim() === "" ? current.title : thread.title;
+        const gapAt = dateTime(plan.messages[0]!.createdAt);
+        yield* eventSink.write({
+          events: [
+            ...(gapSlot === null
+              ? []
+              : [
+                  {
+                    id: EventId.make(`${IMPORT_EVENT_PREFIX}:history-gap:${threadId}:${gapSlot}`),
+                    type: "turn-item.updated" as const,
+                    threadId,
+                    occurredAt: gapAt,
+                    payload: {
+                      id: TurnItemId.make(
+                        `${IMPORT_EVENT_PREFIX}:history-gap:${threadId}:${gapSlot}`,
+                      ),
+                      threadId,
+                      runId: null,
+                      nodeId: null,
+                      providerThreadId: null,
+                      providerTurnId: null,
+                      nativeItemRef: null,
+                      parentItemId: null,
+                      ordinal: gapSlot + 1,
+                      status: "completed" as const,
+                      title: null,
+                      startedAt: gapAt,
+                      completedAt: gapAt,
+                      updatedAt: gapAt,
+                      type: "system_notice" as const,
+                      message:
+                        "Some messages the session gained after its import were not imported here. The original session transcript is unchanged.",
+                    },
+                  },
+                ]),
+            ...plan.messages.flatMap((message, index) =>
+              messageEvents({ threadId, index: messageSlot + index, message }),
+            ),
+            ...(title === current.title &&
+            DateTime.toEpochMillis(updatedAt) === DateTime.toEpochMillis(current.updatedAt)
+              ? []
+              : [
+                  {
+                    id: yield* idAllocator.allocate.event({ threadId }),
+                    type: "thread.metadata-updated" as const,
+                    threadId,
+                    providerInstanceId: current.providerInstanceId,
+                    occurredAt: updatedAt,
+                    payload: { ...current, title, updatedAt },
+                  },
+                ]),
+          ],
+        });
+        return "refreshed" as const;
+      }),
+    );
+  });
+  /**
+   * Imports a project's recent agent sessions, refreshes earlier imports that fell behind their
+   * session, and links them to the parents the Claude desktop app names. A dry run reports the
+   * same without writing anything.
+   */
+  const importAgentThreads = Effect.fn("importAgentThreadsV2")(function* (
+    input: AgentSessionImportInput,
+    options: { readonly dryRun?: boolean } = {},
+  ) {
+    const dryRun = options.dryRun === true;
     const project = yield* projects.getById(input.projectId).pipe(
       Effect.mapError((cause) => new AgentSessionScanError({ operation: "read-projects", cause })),
       Effect.flatMap(
@@ -326,13 +548,28 @@ const make = Effect.gen(function* () {
     })).flat();
     const outcomes = scanner.recentThreads(project.workspaceRoot, completedSources);
     const importedThreadIds = new Set<ThreadId>();
-    let importedCount = 0;
-    let skippedCount = 0;
+    const imported: ThreadId[] = [];
+    const refreshed: ThreadId[] = [];
+    const linked: ThreadId[] = [];
+    const skipped: Partial<Record<AgentSessionImportSkipReason, number>> = {};
+    let unchangedCount = 0;
+    const skip = (reason: AgentSessionImportSkipReason) => {
+      skipped[reason] = (skipped[reason] ?? 0) + 1;
+    };
+    const link = Effect.fn("AgentSessionImporter.link")(function* (
+      threadId: ThreadId,
+      providerInstanceId: string,
+      claudeDesktop: ClaudeDesktopLineage | undefined,
+    ) {
+      if (yield* linkImportedThread(threadId, providerInstanceId, claudeDesktop, dryRun)) {
+        linked.push(threadId);
+      }
+    });
 
     yield* Stream.runForEach(outcomes, (outcome) =>
       Effect.gen(function* () {
         if (outcome._tag === "Skipped") {
-          skippedCount += 1;
+          skip("unreadable");
           return;
         }
         const source = outcome.source;
@@ -341,17 +578,18 @@ const make = Effect.gen(function* () {
         );
         if (outcome._tag === "AlreadyImported") {
           importedThreadIds.add(threadId);
-          yield* linkImportedThread(threadId, source.providerInstanceId, outcome.claudeDesktop);
+          unchangedCount += 1;
+          yield* link(threadId, source.providerInstanceId, outcome.claudeDesktop);
           return;
         }
         if (outcome._tag === "Duplicate") {
-          if (importedThreadIds.has(threadId)) {
+          if (importedThreadIds.has(threadId) && !dryRun) {
             yield* runtimes.recordImportedTranscript({ threadId, source }).pipe(Effect.ignore);
           }
           return;
         }
 
-        const imported = yield* Effect.gen(function* () {
+        const result = yield* Effect.gen(function* () {
           const thread = outcome.thread;
           if (
             thread.source === "claudeAgent" &&
@@ -397,25 +635,19 @@ const make = Effect.gen(function* () {
             if (existing.value.thread.historyOrigin !== "v1_import") {
               return yield* new AgentSessionThreadModifiedError({ threadId });
             }
-            // A transcript can change after the import, so record it only when the
-            // thread already holds exactly its messages.
-            const stored = existing.value.messages;
-            if (
-              stored.length !== thread.messages.length ||
-              stored.some(
-                (message, index) =>
-                  message.role !== thread.messages[index]?.role ||
-                  message.text !== thread.messages[index]?.text,
-              )
-            ) {
-              return false;
+            // A transcript can change after the import. Its thread takes the messages it
+            // gained, and the transcript is recorded only once the thread holds them all.
+            const refresh = yield* refreshImportedThread(threadId, thread, dryRun);
+            if (refresh === "t3-activity" || refresh === "diverged") return refresh;
+            if (!dryRun) {
+              yield* persistRuntime;
+              yield* runtimes.recordImportedTranscript({ threadId, source });
             }
-            yield* persistRuntime;
-            yield* runtimes.recordImportedTranscript({ threadId, source });
-            yield* linkImportedThread(threadId, source.providerInstanceId, outcome.claudeDesktop);
+            yield* link(threadId, source.providerInstanceId, outcome.claudeDesktop);
             importedThreadIds.add(threadId);
-            return null;
+            return refresh;
           }
+          if (dryRun) return "imported" as const;
 
           const model = thread.model ?? DEFAULT_MODEL_BY_PROVIDER[driver] ?? DEFAULT_MODEL;
           const providerThreadId = idAllocator.derive.providerThread({
@@ -540,26 +772,64 @@ const make = Effect.gen(function* () {
           if (committed.length === 0) return null;
           yield* persistRuntime;
           yield* runtimes.recordImportedTranscript({ threadId, source });
-          return true;
+          return "imported" as const;
         }).pipe(
           Effect.catch((cause) =>
             Effect.logWarning("Could not import an agent session", {
               provider: outcome.thread.source,
               sessionId: outcome.thread.providerSessionId,
               cause,
-            }).pipe(Effect.as(false)),
+            }).pipe(
+              Effect.as<AgentSessionImportSkipReason>(
+                cause._tag === "AgentSessionUnresumableSessionError"
+                  ? "unresumable"
+                  : cause._tag === "AgentSessionThreadProjectConflictError"
+                    ? "other-project"
+                    : cause._tag === "AgentSessionThreadModifiedError"
+                      ? "t3-activity"
+                      : "failed",
+              ),
+            ),
           ),
         );
-        if (imported === true) {
-          importedThreadIds.add(threadId);
-          importedCount += 1;
-        } else if (imported === false) {
-          skippedCount += 1;
+        switch (result) {
+          case null:
+            return;
+          case "imported":
+            importedThreadIds.add(threadId);
+            imported.push(threadId);
+            return;
+          case "refreshed":
+            refreshed.push(threadId);
+            return;
+          case "unchanged":
+            unchangedCount += 1;
+            return;
+          default:
+            skip(result);
         }
       }),
     );
 
-    return { importedCount, skippedCount } satisfies AgentSessionImportResult;
+    return {
+      imported,
+      refreshed,
+      unchangedCount,
+      linked,
+      skipped,
+      skippedCount: Object.values(skipped).reduce((sum, count) => sum + count, 0),
+    } satisfies AgentSessionImportReport;
+  });
+
+  const importRecentAgentThreads = Effect.fn("importRecentAgentThreadsV2")(function* (
+    input: AgentSessionImportInput,
+  ) {
+    const report = yield* importAgentThreads(input);
+    return {
+      importedCount: report.imported.length,
+      skippedCount: report.skippedCount,
+      ...(report.refreshed.length === 0 ? {} : { refreshedCount: report.refreshed.length }),
+    } satisfies AgentSessionImportResult;
   });
 
   /**
@@ -660,7 +930,7 @@ const make = Effect.gen(function* () {
     return yield* commit(messages);
   });
 
-  return { importRecentAgentThreads, importNativeHistory };
+  return { importAgentThreads, importRecentAgentThreads, importNativeHistory };
 });
 
 type AgentSessionImporterShape = Effect.Success<typeof make>;

@@ -1,5 +1,5 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
-import { expect, it } from "@effect/vitest";
+import { describe, expect, it } from "@effect/vitest";
 import {
   type AgentSessionSource,
   type ServerSettingsError,
@@ -279,6 +279,8 @@ const makeImporter = Effect.fn(function* (
   const importer = Context.get(context, AgentSessionImporter.AgentSessionImporter);
   return {
     run: importer.importRecentAgentThreads({ projectId }),
+    report: (options?: { readonly dryRun?: boolean }) =>
+      importer.importAgentThreads({ projectId }, options),
     importNativeHistory: importer.importNativeHistory,
     published,
   };
@@ -543,7 +545,7 @@ it.effect("counts only new threads when re-importing cached and recovered transc
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
-it.effect("does not certify new native history after a partial import retry", () =>
+it.effect("catches a partial import up with its continued transcript", () =>
   Effect.gen(function* () {
     const sql = yield* SqlClient.SqlClient;
     const projections = yield* ProjectionStore.ProjectionStoreV2;
@@ -562,17 +564,18 @@ it.effect("does not certify new native history after a partial import retry", ()
       { role: "user", text: "Continue outside T3", createdAt: timestamp },
       { role: "assistant", text: "Native continuation", createdAt: timestamp },
     );
-    // The thread holds only the original messages, so the continued transcript stays unrecorded.
+    // The thread takes the continuation, and only then is the transcript recorded.
     expect(yield* (yield* makeImporter([continued])).run).toEqual({
       importedCount: 0,
-      skippedCount: 1,
+      skippedCount: 0,
+      refreshedCount: 1,
     });
-    expect(yield* runtimes.list()).toEqual([]);
+    expect(yield* runtimes.list()).toHaveLength(1);
     expect(
       (yield* projections.getThreadRecords(threadId, ["messages"])).messages.map(
         (message) => message.text,
       ),
-    ).toEqual(["Fix it", "Fixed"]);
+    ).toEqual(["Fix it", "Fixed", "Continue outside T3", "Native continuation"]);
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
 
@@ -1095,5 +1098,178 @@ it.effect("nests Claude sessions the desktop app spawned, and links earlier impo
     ]);
     expect(yield* again.run).toEqual({ importedCount: 0, skippedCount: 0 });
     expect((yield* lineageOf(earlier)).spawnedBy).toBe(importId(parent));
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+describe("planImportedHistoryRefresh", () => {
+  const message = (text: string, minute = 0, role: "user" | "assistant" = "user") => ({
+    role,
+    text,
+    createdAt: `2026-09-01T10:${String(minute).padStart(2, "0")}:00.000Z`,
+  });
+  const plan = AgentSessionImporter.planImportedHistoryRefresh;
+
+  it("appends what follows an exact prefix", () => {
+    const stored = [message("a"), message("b", 1, "assistant")];
+    expect(plan(stored, { messages: stored, omittedMessageCount: 0 })).toEqual({
+      kind: "unchanged",
+    });
+    expect(
+      plan(stored, { messages: [...stored, message("c", 2)], omittedMessageCount: 0 }),
+    ).toEqual({ kind: "append", messages: [message("c", 2)], gap: false });
+  });
+
+  it("places the thread's end in a truncated read", () => {
+    const history = Array.from({ length: 10 }, (_, index) => message(`m${index}`, index + 1));
+    const stored = [message("first"), ...history];
+    // The read keeps the first message and a window that starts inside the thread's history.
+    const window = [message("first"), ...history.slice(2)];
+    expect(
+      plan(stored, { messages: [...window, message("new", 30)], omittedMessageCount: 2 }),
+    ).toEqual({ kind: "append", messages: [message("new", 30)], gap: false });
+    expect(plan(stored, { messages: window, omittedMessageCount: 2 })).toEqual({
+      kind: "unchanged",
+    });
+  });
+
+  it("appends after a gap only when the whole window is newer", () => {
+    const stored = [message("first"), message("x", 1)];
+    const later = [message("first"), message("p", 5), message("q", 6)];
+    expect(plan(stored, { messages: later, omittedMessageCount: 9 })).toEqual({
+      kind: "append",
+      messages: later.slice(1),
+      gap: true,
+    });
+    expect(
+      plan(stored, {
+        messages: [message("first"), message("old", 0), message("q", 6)],
+        omittedMessageCount: 9,
+      }),
+    ).toEqual({ kind: "diverged" });
+  });
+
+  it("calls an edited history or an ambiguous overlap divergence", () => {
+    const stored = [message("first"), message("b", 1)];
+    expect(
+      plan(stored, { messages: [message("first"), message("changed", 1)], omittedMessageCount: 0 }),
+    ).toEqual({ kind: "diverged" });
+    const repeated = [message("a", 1), message("go", 2)];
+    expect(
+      plan([message("first"), ...repeated], {
+        messages: [message("first"), message("b", 1), ...repeated, message("c", 3), ...repeated],
+        omittedMessageCount: 5,
+      }),
+    ).toEqual({ kind: "diverged" });
+  });
+});
+
+it.effect("refreshes an import that fell behind its session, unless dry or used in T3", () =>
+  Effect.gen(function* () {
+    const sink = yield* EventSink.EventSinkV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const claude = (id: string) => candidate(CLAUDE_MODEL_SELECTION, id, "claudeAgent");
+    const grown = claude("55555555-5555-4555-8555-555555555555");
+    const used = claude("66666666-6666-4666-8666-666666666666");
+    yield* (yield* makeImporter([grown, used])).run;
+
+    const continued = (source: ReturnType<typeof candidate>) => {
+      const next = claude(source.source.providerSessionId);
+      next.source.size = 300;
+      next.thread.title = "Renamed in Claude";
+      next.thread.updatedAt = "2026-09-01T11:00:00.000Z";
+      next.thread.messages.push(
+        { role: "user", text: "And then?", createdAt: "2026-09-01T10:59:00.000Z" },
+        { role: "assistant", text: "Done", createdAt: "2026-09-01T11:00:00.000Z" },
+      );
+      return next;
+    };
+    const usedThread = yield* projections.getThread(importId(used));
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make(`${usedThread.id}:t3-message`),
+          type: "message.updated",
+          threadId: usedThread.id,
+          occurredAt: now,
+          payload: {
+            createdBy: "user",
+            creationSource: "web",
+            id: MessageId.make(`${usedThread.id}:t3`),
+            threadId: usedThread.id,
+            runId: RunId.make(`${usedThread.id}:run`),
+            nodeId: null,
+            role: "user",
+            text: "Sent from T3",
+            attachments: [],
+            streaming: false,
+            createdAt: now,
+            updatedAt: now,
+          },
+        },
+      ],
+    });
+
+    const dry = yield* (yield* makeImporter([continued(grown), continued(used)])).report({
+      dryRun: true,
+    });
+    expect(dry).toMatchObject({
+      imported: [],
+      refreshed: [importId(grown)],
+      skipped: { "t3-activity": 1 },
+    });
+    const textsOf = (source: ReturnType<typeof candidate>) =>
+      projections
+        .getThreadRecords(importId(source), ["messages"])
+        .pipe(Effect.map(({ messages }) => messages.map((entry) => entry.text)));
+    expect(yield* textsOf(grown)).toEqual(["Fix it", "Fixed"]);
+
+    const applied = yield* (yield* makeImporter([continued(grown), continued(used)])).report();
+    expect(applied).toMatchObject({ refreshed: [importId(grown)], skipped: { "t3-activity": 1 } });
+    expect(yield* textsOf(grown)).toEqual(["Fix it", "Fixed", "And then?", "Done"]);
+    const records = yield* projections.getThreadRecords(importId(grown), ["messages"]);
+    expect(records.messages.map((entry) => entry.id)).toEqual(
+      [0, 1, 2, 3].map((slot) => `${importId(grown)}:${String(slot).padStart(6, "0")}`),
+    );
+    expect(records.thread.title).toBe("Renamed in Claude");
+    expect(DateTime.formatIso(records.thread.updatedAt)).toBe("2026-09-01T11:00:00.000Z");
+    expect(yield* textsOf(used)).toEqual(["Fix it", "Fixed", "Sent from T3"]);
+  }).pipe(Effect.scoped, Effect.provide(persistence)),
+);
+
+it.effect("keeps a placement a person chose when linking earlier imports", () =>
+  Effect.gen(function* () {
+    const sink = yield* EventSink.EventSinkV2;
+    const projections = yield* ProjectionStore.ProjectionStoreV2;
+    const claude = (id: string) => candidate(CLAUDE_MODEL_SELECTION, id, "claudeAgent");
+    const parent = claude("77777777-7777-4777-8777-777777777777");
+    const child = claude("88888888-8888-4888-8888-888888888888");
+    yield* (yield* makeImporter([parent, child])).run;
+    const thread = yield* projections.getThread(importId(child));
+    yield* sink.write({
+      events: [
+        {
+          id: EventId.make(`${thread.id}:detached`),
+          type: "thread.metadata-updated",
+          threadId: thread.id,
+          occurredAt: now,
+          payload: { ...thread, lineage: { ...thread.lineage, nestParentThreadId: null } },
+        },
+      ],
+    });
+    const report = yield* (yield* makeImporter([
+      {
+        _tag: "AlreadyImported",
+        source: child.source,
+        claudeDesktop: { parentSessionId: parent.source.providerSessionId, sideChat: false },
+      },
+    ])).report();
+    expect(report.linked).toEqual([importId(child)]);
+    expect((yield* projections.getThread(importId(child))).lineage).toEqual({
+      parentThreadId: null,
+      relationshipToParent: null,
+      rootThreadId: importId(child),
+      spawnedBy: importId(parent),
+      nestParentThreadId: null,
+    });
   }).pipe(Effect.scoped, Effect.provide(persistence)),
 );
