@@ -81,3 +81,67 @@ export function generateSpreadPinOrderKeys(count: number): string[] {
   }
   return keys;
 }
+
+/** Keys that place `movedId` at its index in `orderedIds`: one new key when its neighbors
+    allow, else a fresh spread over the whole list. */
+export function planOrderKeyMove(input: {
+  readonly orderedIds: readonly string[];
+  /** Include retained keys from hidden rows; only orderedIds receive writes. */
+  readonly keysById: ReadonlyMap<string, string | null | undefined>;
+  readonly movedId: string;
+}): ReadonlyArray<{ readonly id: string; readonly orderKey: string }> {
+  const { orderedIds, keysById, movedId } = input;
+  const visibleIds = new Set(orderedIds);
+  const reservedKeys = new Set(
+    [...keysById].flatMap(([id, key]) => (!visibleIds.has(id) && key != null ? [key] : [])),
+  );
+  const movedIndex = orderedIds.indexOf(movedId);
+  if (movedIndex === -1) return [];
+  const beforeId = movedIndex > 0 ? orderedIds[movedIndex - 1] : null;
+  const afterId = movedIndex < orderedIds.length - 1 ? orderedIds[movedIndex + 1] : null;
+  const beforeKey = beforeId != null ? (keysById.get(beforeId) ?? null) : null;
+  const afterKey = afterId != null ? (keysById.get(afterId) ?? null) : null;
+  const beforeUsable = beforeId === null || beforeKey != null;
+  const afterUsable = afterId === null || afterKey != null;
+  if (beforeUsable && afterUsable) {
+    let key = pinOrderKeyBetween(beforeKey, afterKey);
+    while (key !== null && reservedKeys.has(key)) key = pinOrderKeyBetween(key, afterKey);
+    if (key !== null) return [{ id: movedId, orderKey: key }];
+  }
+  const keys = generateSpreadPinOrderKeys(orderedIds.length + reservedKeys.size)
+    .filter((key) => !reservedKeys.has(key))
+    .slice(0, orderedIds.length);
+  return orderedIds.flatMap((id, index) => {
+    const key = keys[index]!;
+    return keysById.get(id) === key ? [] : [{ id, orderKey: key }];
+  });
+}
+
+/** Unkeyed items first, newest first, then keyed items by key: a list stays automatic
+    until it is arranged, and new items land on top of the arranged ones. */
+export function sortUnkeyedRecentThenKeyed<T>(
+  items: readonly T[],
+  input: {
+    readonly key: (item: T) => string | null | undefined;
+    readonly recencyMs: (item: T) => number;
+    readonly tiebreak: (left: T, right: T) => number;
+  },
+): T[] {
+  const recency = new Map<T, number>();
+  for (const item of items) if (input.key(item) == null) recency.set(item, input.recencyMs(item));
+  return [...items].sort((left, right) => {
+    const leftKey = input.key(left);
+    const rightKey = input.key(right);
+    if (leftKey == null && rightKey != null) return -1;
+    if (leftKey != null && rightKey == null) return 1;
+    const order =
+      leftKey != null && rightKey != null
+        ? leftKey < rightKey
+          ? -1
+          : leftKey > rightKey
+            ? 1
+            : 0
+        : recency.get(right)! - recency.get(left)!;
+    return order || input.tiebreak(left, right);
+  });
+}

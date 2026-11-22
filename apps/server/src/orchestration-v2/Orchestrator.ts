@@ -4968,6 +4968,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             unsettledAt: null,
             pinnedAt: null,
             pinOrderKey: null,
+            pinSectionId: null,
             activeOrderKey: null,
             snoozedUntil: null,
             snoozedAt: null,
@@ -5028,6 +5029,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...(alreadyPinned || command.orderKey === undefined
               ? {}
               : { pinOrderKey: command.orderKey }),
+            ...(command.sectionId === undefined ? {} : { pinSectionId: command.sectionId }),
             settledOverride:
               thread.settledOverride === "settled" ? "active" : thread.settledOverride,
             settledAt: thread.settledOverride === "settled" ? null : thread.settledAt,
@@ -5044,15 +5046,20 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             ...thread,
             pinnedAt: null,
             pinOrderKey: null,
+            pinSectionId: null,
             updatedAt: alreadyUnpinned ? thread.updatedAt : now,
           };
         }
         case "thread.pin.reorder": {
-          const keyUnchanged = thread.pinOrderKey === command.orderKey;
+          const unchanged =
+            thread.pinOrderKey === command.orderKey &&
+            (command.sectionId === undefined ||
+              (thread.pinSectionId ?? null) === command.sectionId);
           return {
             ...thread,
             pinOrderKey: command.orderKey,
-            updatedAt: keyUnchanged ? thread.updatedAt : now,
+            ...(command.sectionId === undefined ? {} : { pinSectionId: command.sectionId }),
+            updatedAt: unchanged ? thread.updatedAt : now,
           };
         }
         case "thread.active.reorder": {

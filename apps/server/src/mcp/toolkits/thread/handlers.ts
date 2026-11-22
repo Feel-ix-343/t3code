@@ -7,7 +7,9 @@ import {
   OrchestratorMcpFailure,
   type OrchestrationV2Command,
 } from "@t3tools/contracts";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
+import * as SecureRandom from "effect/crypto/SecureRandom";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
 
@@ -20,11 +22,20 @@ import {
   readThread,
   unavailable,
 } from "../../threadAccess.ts";
-import type * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
+import * as ThreadManagement from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as ThreadMessageIntake from "../../../orchestration-v2/ThreadMessageIntake.ts";
 import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
+import {
+  type ArrangeWrite,
+  effectivePinSection,
+  folderOrder,
+  pinnedListOrder,
+  planFolderMove,
+  planPinnedMove,
+} from "./sidebarArrangement.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -409,6 +420,74 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
       }
+      if (input.action === "move" || (input.action === "pin" && input.sectionId !== undefined)) {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const { sidebarSections: sections } = yield* settings.getSettings.pipe(
+          Effect.mapError(unavailable),
+        );
+        const thread = projection.thread;
+        if (
+          input.sectionId != null &&
+          !sections.some((section) => section.id === input.sectionId)
+        ) {
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message:
+              "No sidebar section has that `sectionId`; list them with `t3_sidebar_section`.",
+          });
+        }
+        let writes: ReadonlyArray<ArrangeWrite> | OrchestratorMcpFailure;
+        if (input.action === "pin" || input.sectionId !== undefined || thread.pinnedAt != null) {
+          const index = yield* threads.listActiveShellIndex().pipe(Effect.mapError(unavailable));
+          const sectionId =
+            input.sectionId !== undefined
+              ? input.sectionId
+              : effectivePinSection(thread.pinSectionId, sections);
+          const beforeThreadId =
+            input.action === "pin"
+              ? (pinnedListOrder(index, sectionId, sections).find((entry) => entry.id !== thread.id)
+                  ?.id ?? null)
+              : yield* required(input.beforeThreadId, "beforeThreadId");
+          writes = planPinnedMove({ thread, sectionId, beforeThreadId, index, sections });
+        } else {
+          if (thread.settledOverride === "settled") {
+            return yield* new OrchestratorMcpFailure({
+              code: "invalid_request",
+              message: "Only a pinned or active thread can be moved; un-settle it first.",
+            });
+          }
+          const beforeThreadId = yield* required(input.beforeThreadId, "beforeThreadId");
+          const snapshot = yield* threads
+            .getShellSnapshot({ projectId: thread.projectId, unsettledOnly: true })
+            .pipe(Effect.mapError(unavailable));
+          writes = planFolderMove({
+            threadId: thread.id,
+            beforeThreadId,
+            folder: folderOrder(snapshot.threads, yield* DateTime.now),
+          });
+        }
+        if (writes instanceof OrchestratorMcpFailure) return yield* writes;
+        let sequence: number | undefined;
+        for (const write of writes) {
+          const commandId = yield* newCommandId();
+          const result = yield* threads
+            .dispatch(
+              write.type === "thread.active.reorder"
+                ? { ...write, commandId }
+                : {
+                    type: write.type,
+                    commandId,
+                    threadId: write.threadId,
+                    orderKey: write.orderKey,
+                    ...(write.sectionId === undefined ? {} : { sectionId: write.sectionId }),
+                  },
+            )
+            .pipe(Effect.mapError(dispatchFailure));
+          sequence = result.sequence;
+        }
+        if (sequence === undefined) return yield* unavailable();
+        return { sequence };
+      }
       let command: OrchestrationV2Command;
       switch (input.action) {
         case "snooze":
@@ -441,5 +520,98 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const result = yield* threads.dispatch(command).pipe(Effect.mapError(dispatchFailure));
       return { sequence: result.sequence };
     }),
+  ),
+  t3_sidebar_section: McpToolAccess.either(
+    (input) => input.action === "list",
+    McpToolAccess.reads(() =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const { sidebarSections } = yield* settings.getSettings.pipe(Effect.mapError(unavailable));
+        return { sections: sidebarSections };
+      }),
+    ),
+    McpToolAccess.writes((input) =>
+      Effect.gen(function* () {
+        const settings = yield* ServerSettings.ServerSettingsService;
+        const { sidebarSections: current } = yield* settings.getSettings.pipe(
+          Effect.mapError(unavailable),
+        );
+        const existing = (sectionId: string) =>
+          current.some((section) => section.id === sectionId)
+            ? Effect.succeed(sectionId)
+            : Effect.fail(
+                new OrchestratorMcpFailure({
+                  code: "invalid_request",
+                  message: "No sidebar section has that `sectionId`.",
+                }),
+              );
+        let next = current;
+        let sectionId: string | undefined;
+        switch (input.action) {
+          case "create": {
+            const title = yield* required(input.title, "title");
+            const random = yield* SecureRandom.SecureRandom;
+            sectionId = `section-${yield* random.uuidV4()}`;
+            next = [...current, { id: sectionId, title }];
+            break;
+          }
+          case "rename": {
+            sectionId = yield* existing(yield* required(input.sectionId, "sectionId"));
+            const title = yield* required(input.title, "title");
+            next = current.map((section) =>
+              section.id === sectionId ? { ...section, title } : section,
+            );
+            break;
+          }
+          case "reorder": {
+            sectionId = yield* existing(yield* required(input.sectionId, "sectionId"));
+            const beforeSectionId = yield* required(input.beforeSectionId, "beforeSectionId");
+            if (beforeSectionId !== null) yield* existing(beforeSectionId);
+            const moving = current.find((section) => section.id === sectionId)!;
+            const rest = current.filter((section) => section.id !== sectionId);
+            const index =
+              beforeSectionId === null
+                ? rest.length
+                : rest.findIndex((section) => section.id === beforeSectionId);
+            next = [...rest.slice(0, index), moving, ...rest.slice(index)];
+            break;
+          }
+          case "delete": {
+            sectionId = yield* existing(yield* required(input.sectionId, "sectionId"));
+            // Out of the section first, so no client shows a pin in a missing section.
+            const threads = yield* ThreadManagement.ThreadManagementService;
+            const index = yield* threads.listActiveShellIndex().pipe(Effect.mapError(unavailable));
+            for (const entry of index) {
+              if (entry.pinnedAt == null || entry.pinSectionId !== sectionId) continue;
+              if (entry.pinOrderKey == null) continue;
+              yield* threads
+                .dispatch({
+                  type: "thread.pin.reorder",
+                  commandId: yield* newCommandId(),
+                  threadId: entry.id,
+                  orderKey: entry.pinOrderKey,
+                  sectionId: null,
+                })
+                .pipe(Effect.mapError(dispatchFailure));
+            }
+            next = current.filter((section) => section.id !== sectionId);
+            break;
+          }
+          default:
+            return { sections: current };
+        }
+        const { sidebarSections } = yield* settings
+          .updateSettings({ sidebarSections: next })
+          .pipe(
+            Effect.mapError(
+              (error) =>
+                new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
+            ),
+          );
+        return input.action === "delete"
+          ? { sections: sidebarSections }
+          : { sections: sidebarSections, sectionId: sectionId! };
+      }),
+    ),
   ),
 });

@@ -12,6 +12,8 @@ export type ThreadActionMenuId =
   | "project-settings"
   | "pin"
   | "unpin"
+  | "section"
+  | `section:${string}`
   | "settle"
   | "unsettle"
   | "auto-settle"

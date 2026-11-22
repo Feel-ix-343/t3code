@@ -159,9 +159,18 @@ threads has no folder unless it is pinned or you pick it in the project filter. 
 project's folder comes last and shows only while it has active threads. Click a folder to open or
 close it. A closed folder shows how many threads it holds, and a dot when one of them
 needs you. Use the pen button on a folder, or right-click it, to start a thread in that project.
-Pinned threads stay above the folders, and Snoozed and Settled stay below them. In this mode you
-can drag a thread onto the composer to mention it, but not within the sidebar, and the Working
-section is off. Each device keeps its own choice.
+Pinned threads stay above the folders, and Snoozed and Settled stay below them. The Working
+section is off in this mode. Each device keeps its own choice.
+
+Drag a thread within its folder to set its order; new threads still appear at the top of the
+folder. Drag a thread up into the pinned area to pin it where you drop it, or a pinned thread down
+into its project's folder to unpin it. Dragging onto the composer still mentions the thread.
+
+To group pinned threads, choose **Move to section → New section…** from a thread's menu. Sections
+sit between your plain pins and the folders. Drag threads into, out of, and between them, or use
+**Move to section** again. A section's **…** menu renames, moves, or deletes it; deleting a section
+keeps its threads pinned. Sections and the order you set are saved on the server, so every device
+connected to it shows the same arrangement. Agents can do the same through T3 Code's MCP tools.
 
 ## Settle finished work
 

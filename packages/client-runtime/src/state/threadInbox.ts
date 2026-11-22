@@ -1,4 +1,5 @@
 // @effect-diagnostics globalTimers:off - Shelf placement timers run in web and native clients, outside an Effect runtime.
+import { sortUnkeyedRecentThenKeyed } from "@t3tools/shared/pinOrderKey";
 import { threadRuntimeIsActive, type EnvironmentThreadShell } from "./models.ts";
 import { toSortableTimestamp } from "./threadSort.ts";
 import { effectiveSnoozed } from "./threadSettled.ts";
@@ -78,21 +79,34 @@ type WorkingSortInput = Pick<
   "id" | "environmentId" | "createdAt" | "latestRun" | "latestUserAuthoredMessageAt"
 >;
 
-export function sortWorkingThreadsBySend<T extends WorkingSortInput>(threads: readonly T[]): T[] {
-  const timestamps = new Map(
-    threads.map((thread) => [
-      thread,
-      Math.max(
-        toSortableTimestamp(thread.createdAt) ?? 0,
-        toSortableTimestamp(
-          (thread.latestUserAuthoredMessageAt === undefined
-            ? thread.latestRun?.requestedAt
-            : thread.latestUserAuthoredMessageAt) ?? undefined,
-        ) ?? 0,
-      ),
-    ]),
+function threadSendRecencyMs(thread: WorkingSortInput): number {
+  return Math.max(
+    toSortableTimestamp(thread.createdAt) ?? 0,
+    toSortableTimestamp(
+      (thread.latestUserAuthoredMessageAt === undefined
+        ? thread.latestRun?.requestedAt
+        : thread.latestUserAuthoredMessageAt) ?? undefined,
+    ) ?? 0,
   );
-  return sortNewestFirst(threads, timestamps);
+}
+
+export function sortWorkingThreadsBySend<T extends WorkingSortInput>(threads: readonly T[]): T[] {
+  return sortNewestFirst(
+    threads,
+    new Map(threads.map((thread) => [thread, threadSendRecencyMs(thread)])),
+  );
+}
+
+/** A project folder: threads the user has not arranged by latest send, above arranged ones. */
+export function sortFolderThreads<
+  T extends WorkingSortInput & Pick<EnvironmentThreadShell, "activeOrderKey">,
+>(threads: readonly T[]): T[] {
+  return sortUnkeyedRecentThenKeyed(threads, {
+    key: (thread) => thread.activeOrderKey,
+    recencyMs: threadSendRecencyMs,
+    tiebreak: (left, right) =>
+      left.id.localeCompare(right.id) || left.environmentId.localeCompare(right.environmentId),
+  });
 }
 
 function sortNewestFirst<T extends Pick<EnvironmentThreadShell, "id" | "environmentId">>(

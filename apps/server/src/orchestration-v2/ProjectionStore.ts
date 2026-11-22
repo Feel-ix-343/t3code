@@ -512,6 +512,7 @@ export interface ActiveShellIndexEntry extends Pick<
   | "settledAt"
   | "pinnedAt"
   | "pinOrderKey"
+  | "pinSectionId"
   | "snoozedUntil"
 > {
   /** False only when no run, request, work item, or watch can make the shell live. */
@@ -2012,6 +2013,7 @@ export function threadShellFromProjection(
 
     autoSettleDisabledAt: projection.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: projection.thread.pinOrderKey ?? null,
+    pinSectionId: projection.thread.pinSectionId ?? null,
     ...(projection.thread.tags?.length ? { tags: projection.thread.tags } : {}),
     lastVisitedAt: projection.thread.lastVisitedAt,
     opens: projection.thread.opens ?? null,
@@ -2310,6 +2312,7 @@ function shellFromState(input: {
 
     autoSettleDisabledAt: input.state.thread.autoSettleDisabledAt ?? null,
     pinOrderKey: input.state.thread.pinOrderKey ?? null,
+    pinSectionId: input.state.thread.pinSectionId ?? null,
     ...(input.state.thread.tags?.length ? { tags: input.state.thread.tags } : {}),
     lastVisitedAt: input.state.thread.lastVisitedAt,
     opens: input.state.thread.opens ?? null,
@@ -9492,6 +9495,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         readonly settled_at: string | null;
         readonly pinned_at: string | null;
         readonly pin_order_key: string | null;
+        readonly pin_section_id: string | null;
         readonly snoozed_until: string | null;
         readonly may_be_live: number;
         readonly has_remote_tasks: number;
@@ -9507,6 +9511,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
           ${indexedField("$.settledAt")} AS settled_at,
           ${indexedField("$.pinnedAt")} AS pinned_at,
           ${indexedField("$.pinOrderKey")} AS pin_order_key,
+          ${indexedField("$.pinSectionId")} AS pin_section_id,
           ${indexedField("$.snoozedUntil")} AS snoozed_until,
           -- A superset of isLiveSubagentShell: the sources of its run status, pending request,
           -- and pending background work. Each source is one list for the whole read, found
@@ -9571,6 +9576,7 @@ export const layer: Layer.Layer<ProjectionStoreV2, never, SqlClient.SqlClient> =
         settledAt: row.settled_at === null ? null : DateTime.makeUnsafe(row.settled_at),
         pinnedAt: row.pinned_at === null ? null : DateTime.makeUnsafe(row.pinned_at),
         pinOrderKey: row.pin_order_key,
+        pinSectionId: row.pin_section_id,
         snoozedUntil: row.snoozed_until === null ? null : DateTime.makeUnsafe(row.snoozed_until),
         mayBeLive: row.may_be_live === 1,
         hasRemoteTasks: row.has_remote_tasks === 1,

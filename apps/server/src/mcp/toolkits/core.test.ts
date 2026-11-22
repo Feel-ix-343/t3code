@@ -86,13 +86,18 @@ const decodeThreadSearchResult = Schema.decodeUnknownEffect(
   ThreadToolkit.tools.t3_thread_search.successSchema,
 );
 
-const layerThreadToolkit = McpHttpServer.layerThreadToolkit.pipe(
-  Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
-  Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
-  Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
-  Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
-  Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
-);
+const threadToolkitWithSettings = (
+  settings: Parameters<typeof ServerSettings.ServerSettingsService.layerTest>[0] = {},
+) =>
+  McpHttpServer.layerThreadToolkit.pipe(
+    Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+    Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+    Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+    Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+    Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
+    Layer.provide(ServerSettings.ServerSettingsService.layerTest(settings)),
+  );
+const layerThreadToolkit = threadToolkitWithSettings();
 
 const threadId = ThreadId.make("mcp-core-thread");
 const scope: McpInvocationContext.McpInvocationScope = {
@@ -870,6 +875,100 @@ it.effect("an MCP pin lands above every existing pin, as a client pin does", () 
   );
 });
 
+it.effect("an MCP move places a pin inside a sidebar section, between its neighbors", () => {
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  const pinnedAt = DateTime.makeUnsafe("2026-11-10T00:00:00.000Z");
+  const indexEntry = (id: string, pinOrderKey: string, pinSectionId: string | null) => ({
+    ...McpToolAccessTestkit.liveThreadShell(ThreadId.make(id)),
+    pinnedAt,
+    pinOrderKey,
+    pinSectionId,
+    mayBeLive: false,
+    hasRemoteTasks: false,
+  });
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (name: string, args: Record<string, unknown>) =>
+      server
+        .callTool({ name, arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+    const moved = yield* call("t3_thread_organize", {
+      action: "move",
+      threadId: "plain-pin",
+      sectionId: "work",
+      beforeThreadId: "work-second",
+    });
+    expect(moved.isError).toBe(false);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        type: "thread.pin.reorder",
+        threadId: "plain-pin",
+        orderKey: pinOrderKeyBetween("f", "t"),
+        sectionId: "work",
+      }),
+    ]);
+
+    const unknown = yield* call("t3_thread_organize", {
+      action: "pin",
+      threadId: "plain-pin",
+      sectionId: "missing",
+    });
+    expect(declaredFailure(unknown)).toMatchObject({ code: "invalid_request" });
+
+    const created = yield* call("t3_sidebar_section", { action: "create", title: "Later" });
+    expect(created.isError).toBe(false);
+    const listed = yield* call("t3_sidebar_section", { action: "list" });
+    expect(listed.structuredContent).toMatchObject({
+      sections: [{ id: "work", title: "Work" }, { title: "Later" }],
+    });
+
+    const deleted = yield* call("t3_sidebar_section", { action: "delete", sectionId: "work" });
+    expect(deleted.isError).toBe(false);
+    // Its pins leave the section before it goes, keeping their place.
+    expect(dispatched.slice(1)).toEqual([
+      expect.objectContaining({ threadId: "work-second", orderKey: "t", sectionId: null }),
+      expect.objectContaining({ threadId: "work-first", orderKey: "f", sectionId: null }),
+    ]);
+    expect(deleted.structuredContent).toMatchObject({ sections: [{ title: "Later" }] });
+  }).pipe(
+    Effect.provide(
+      threadToolkitWithSettings({ sidebarSections: [{ id: "work", title: "Work" }] }).pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(McpToolAccessTestkit.liveThreadShell(id, { runtimeMode: "auto" })),
+            getProjectThreadRecords: ({ threadId: id }) => {
+              const projection = McpToolAccessTestkit.idleThreadProjection(
+                McpToolAccessTestkit.liveThreadShell(id, { runtimeMode: "auto" }),
+              );
+              return Effect.succeed({
+                ...projection,
+                thread: { ...projection.thread, pinnedAt, pinOrderKey: "m", pinSectionId: null },
+              });
+            },
+            listActiveShellIndex: () =>
+              Effect.succeed([
+                indexEntry("work-second", "t", "work"),
+                indexEntry("plain-pin", "m", null),
+                indexEntry("work-first", "f", "work"),
+              ]),
+            dispatch: (command) => {
+              dispatched.push(command);
+              return Effect.succeed({ sequence: dispatched.length, storedEvents: [] });
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
 it.effect("search names the calling thread, so an agent can tell its own match apart", () =>
   Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
@@ -896,6 +995,7 @@ it.effect("search names the calling thread, so an agent can tell its own match a
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(McpToolAccessTestkit.liveThreadsLayer),
@@ -1137,6 +1237,7 @@ it.effect.each([
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),
@@ -1176,6 +1277,7 @@ it.effect("run_scheduled_task_now reports why a started run failed to dispatch",
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(Layer.mock(ThreadManagement.ThreadManagementService)({})),

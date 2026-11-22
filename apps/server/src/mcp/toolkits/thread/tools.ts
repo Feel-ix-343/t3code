@@ -21,6 +21,7 @@ import {
   ProjectId,
   clampedPositiveInt,
 } from "@t3tools/contracts";
+import { SidebarSections, SidebarSectionTitle } from "@t3tools/contracts/settings";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Schema from "effect/Schema";
 import { McpSchema, Tool, Toolkit } from "effect/ai";
@@ -29,16 +30,18 @@ import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskService.ts";
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
+import * as ServerSettings from "../../../serverSettings.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
+    "Pin, snooze, settle, archive, move, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. `pin` with `sectionId` pins into that sidebar section (see `t3_sidebar_section`); null is plain Pinned. `move` reorders a pinned thread in its list or an active one in its project folder: before `beforeThreadId`, or to the end with null; with `sectionId` it moves (and pins) into that list. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),
     action: Schema.Literals([
       "pin",
       "unpin",
+      "move",
       "snooze",
       "unsnooze",
       "settle",
@@ -48,6 +51,8 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
       "mark_unread",
     ]),
     snoozedUntil: Schema.optional(IsoDateTime),
+    sectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+    beforeThreadId: Schema.optional(Schema.NullOr(ThreadId)),
   }),
   success: Schema.Union([
     OrchestrationV2DispatchCommandResult,
@@ -58,10 +63,38 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   dependencies: [
     McpInvocationContext.McpInvocationContext,
     ThreadManagementService.ThreadManagementService,
+    ServerSettings.ServerSettingsService,
     SecureRandom.SecureRandom,
   ],
 })
   .annotate(Tool.Title, "Organize a thread")
+  .annotate(Tool.Strict, true)
+  .annotate(Tool.Destructive, true);
+
+const SidebarSectionTool = Tool.make("t3_sidebar_section", {
+  description:
+    "Manage the user-named sections that group pinned threads in the sidebar's project-folder view. list. create: `title`. rename: `sectionId`, `title`. reorder: `sectionId` before `beforeSectionId`, or to the end with null. delete: `sectionId`; its threads stay pinned. Put threads in one with `t3_thread_organize`. Only when the user asks.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    action: Schema.Literals(["list", "create", "rename", "reorder", "delete"]),
+    sectionId: Schema.optional(TrimmedNonEmptyString),
+    title: Schema.optional(SidebarSectionTitle),
+    beforeSectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  }),
+  success: Schema.Struct({
+    sections: SidebarSections,
+    sectionId: Schema.optional(TrimmedNonEmptyString),
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ServerSettings.ServerSettingsService,
+    SecureRandom.SecureRandom,
+  ],
+})
+  .annotate(Tool.Title, "Manage sidebar sections")
   .annotate(Tool.Strict, true)
   .annotate(Tool.Destructive, true);
 
@@ -260,6 +293,7 @@ export const ThreadToolkit = Toolkit.make(
   ThreadConfigureTool,
   ThreadTransferTool,
   ThreadOrganizeTool,
+  SidebarSectionTool,
   PendingRequestTool,
   QueueTool,
   SubmitOutputTool,

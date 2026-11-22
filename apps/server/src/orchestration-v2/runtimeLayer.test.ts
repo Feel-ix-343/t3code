@@ -3726,6 +3726,38 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
         orderKey: "a0",
       });
       assert.equal((yield* orchestrator.getThreadProjection(threadId)).thread.activeOrderKey, "a0");
+      const pinSectionOf = function* () {
+        const shell = (yield* orchestrator.getShellSnapshot()).threads.find(
+          (thread) => thread.id === threadId,
+        )!;
+        return { section: shell.pinSectionId ?? null, key: shell.pinOrderKey ?? null };
+      };
+      for (const [step, command, expected] of [
+        [
+          "pin-into",
+          { type: "thread.pin", orderKey: "m", sectionId: "work" },
+          { section: "work", key: "m" },
+        ],
+        [
+          "reorder-keeps",
+          { type: "thread.pin.reorder", orderKey: "g" },
+          { section: "work", key: "g" },
+        ],
+        [
+          "reorder-out",
+          { type: "thread.pin.reorder", orderKey: "g", sectionId: null },
+          { section: null, key: "g" },
+        ],
+        ["repin-moves", { type: "thread.pin", sectionId: "later" }, { section: "later", key: "g" }],
+        ["unpin-clears", { type: "thread.unpin" }, { section: null, key: null }],
+      ] as const) {
+        yield* orchestrator.dispatch({
+          ...command,
+          commandId: CommandId.make(`runtime-layer-lifecycle-section-${step}`),
+          threadId,
+        });
+        assert.deepEqual(yield* pinSectionOf(), expected, step);
+      }
 
       const shellOf = (shell: Pick<OrchestrationV2ShellSnapshot, "threads">) =>
         shell.threads.find((thread) => thread.id === threadId)!;

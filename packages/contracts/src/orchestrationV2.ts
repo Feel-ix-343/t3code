@@ -522,6 +522,8 @@ export const OrchestrationV2AppThread = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /** The user-named sidebar section a pinned thread sits in; null is the plain Pinned list. */
+  pinSectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
   tags: Schema.optional(StoredThreadTags),
@@ -2412,6 +2414,8 @@ export const OrchestrationV2ThreadShell = Schema.Struct({
   pinnedAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   autoSettleDisabledAt: Schema.optional(Schema.NullOr(Schema.DateTimeUtc)),
   pinOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
+  /** The user-named sidebar section a pinned thread sits in; null is the plain Pinned list. */
+  pinSectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   activeOrderKey: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   /** Absent on threads written before tags existed; read as empty. */
   tags: Schema.optional(StoredThreadTags),
@@ -3364,6 +3368,8 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: Schema.optional(TrimmedNonEmptyString),
+    /** Absent keeps the current section; null moves the pin to the plain Pinned list. */
+    sectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.unpin"),
@@ -3382,6 +3388,7 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: TrimmedNonEmptyString,
+    sectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.active.reorder"),

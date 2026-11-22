@@ -228,10 +228,22 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 
 export type SidebarListItem =
   | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
-  | { readonly kind: "marker"; readonly marker: SidebarListMarker };
+  | { readonly kind: "marker"; readonly marker: SidebarListMarker }
+  // Project-folder mode only: a user-named section's header or empty-section drop slot.
+  | { readonly kind: "custom-section"; readonly sectionId: string; readonly placeholder: boolean }
+  | { readonly kind: "folder"; readonly projectKey: string };
 
 export function sidebarListItemId(item: SidebarListItem): string {
-  return item.kind === "thread" ? item.key : sidebarMarkerId(item.marker);
+  switch (item.kind) {
+    case "thread":
+      return item.key;
+    case "marker":
+      return sidebarMarkerId(item.marker);
+    case "custom-section":
+      return `${SIDEBAR_MARKER_PREFIX}${item.placeholder ? "section-placeholder" : "section"}:${item.sectionId}`;
+    case "folder":
+      return `${SIDEBAR_MARKER_PREFIX}folder:${item.projectKey}`;
+  }
 }
 
 function sectionAtSidebarSlot(items: readonly SidebarListItem[], index: number): SidebarSection {
@@ -277,7 +289,8 @@ export function resolveSidebarDropTarget(
         item.marker === "settled-header"
       )
         break;
-    } else if (currentSection === "pinned") pinnedOrder.push(item.key);
+    } else if (item.kind !== "thread") continue;
+    else if (currentSection === "pinned") pinnedOrder.push(item.key);
     else activeOrder.push(item.key);
   }
   return { section, pinnedOrder, activeOrder };

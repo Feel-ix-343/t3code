@@ -96,6 +96,22 @@ export const SidebarAutoSettleAfterDays = Schema.Number.check(
   }),
 );
 export type SidebarAutoSettleAfterDays = typeof SidebarAutoSettleAfterDays.Type;
+
+const MAX_SIDEBAR_SECTIONS = 32;
+export const SidebarSectionTitle = TrimmedNonEmptyString.check(
+  Schema.isMaxLength(64),
+  Schema.makeFilter((value) =>
+    /[\p{Cc}]/u.test(value) ? "A section title must be a single line of text." : true,
+  ),
+);
+export const SidebarSection = Schema.Struct({
+  id: TrimmedNonEmptyString.check(Schema.isMaxLength(64)),
+  title: SidebarSectionTitle,
+});
+export type SidebarSection = typeof SidebarSection.Type;
+export const SidebarSections = Schema.Array(SidebarSection).check(
+  Schema.isMaxLength(MAX_SIDEBAR_SECTIONS),
+);
 const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 7;
 
 export const MAX_SNOOZE_PRESET_MINUTES = 30 * 24 * 60;
@@ -1487,6 +1503,8 @@ export const ServerSettings = Schema.Struct({
     Schema.withDecodingDefault(Effect.succeed([])),
   ),
   hideTaggedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
+  /** User-named sidebar sections, in display order. Pinned threads join one through `pinSectionId`. */
+  sidebarSections: SidebarSections.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
   guestSharingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
@@ -1928,6 +1946,7 @@ export const ServerSettingsPatch = Schema.Struct({
   snoozePresets: Schema.optionalKey(SnoozePresetSettings),
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),
   hideTaggedThreads: Schema.optionalKey(Schema.Boolean),
+  sidebarSections: Schema.optionalKey(SidebarSections),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
   promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),

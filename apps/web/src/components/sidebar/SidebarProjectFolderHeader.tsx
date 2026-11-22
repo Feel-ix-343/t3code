@@ -11,6 +11,7 @@ import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
 import { ProjectFavicon } from "../ProjectFavicon";
+import { SidebarSortableSlot } from "./SidebarListMarkers";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
 
@@ -39,6 +40,8 @@ export function sidebarFolderRowId(projectKey: string) {
  * closed folder still says when a hidden thread needs you.
  */
 export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHeader(props: {
+  /** Its slot in the sidebar's sortable list, so dragged rows sort around it. */
+  sortableId: string;
   group: SidebarProjectSnapshot;
   collapsed: boolean;
   hiddenThreads: readonly EnvironmentThreadShell[];
@@ -69,9 +72,10 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
       )
     : null;
   return (
-    <li
+    <SidebarSortableSlot
+      id={props.sortableId}
       data-testid="sidebar-project-folder"
-      className="group/project-folder relative mt-2 list-none first:mt-0"
+      className="group/project-folder relative mt-2 first:mt-0"
     >
       <button
         type="button"
@@ -133,6 +137,6 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
           </TooltipPopup>
         </Tooltip>
       </span>
-    </li>
+    </SidebarSortableSlot>
   );
 });

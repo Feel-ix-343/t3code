@@ -5,6 +5,7 @@ import {
   createInboxReturnTracker,
   isThreadWorking,
   sortInboxThreadsByReturn,
+  sortFolderThreads,
   sortWorkingThreadsBySend,
 } from "./threadInbox.ts";
 
@@ -259,5 +260,23 @@ describe("sortWorkingThreadsBySend", () => {
     expect(
       sortWorkingThreadsBySend([launched, sentFirst, sentLast]).map((thread) => thread.id),
     ).toEqual(["sent-last", "sent-first", "launched"]);
+  });
+});
+
+describe("sortFolderThreads", () => {
+  it("keeps unarranged threads by latest send above arranged ones in key order", () => {
+    const at = (id: string, sentAt: string, activeOrderKey: string | null) => ({
+      ...thread(id, false),
+      latestUserAuthoredMessageAt: sentAt,
+      activeOrderKey,
+    });
+    expect(
+      sortFolderThreads([
+        at("arranged-second", "2026-06-01T05:00:00.000Z", "t"),
+        at("new-older", "2026-06-01T01:00:00.000Z", null),
+        at("arranged-first", "2026-06-01T00:00:00.000Z", "f"),
+        at("new-newer", "2026-06-01T02:00:00.000Z", null),
+      ]).map((thread) => thread.id),
+    ).toEqual(["new-newer", "new-older", "arranged-first", "arranged-second"]);
   });
 });

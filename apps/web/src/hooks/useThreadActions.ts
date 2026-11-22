@@ -776,7 +776,10 @@ export function useThreadActions() {
     });
   };
 
-  const sendPin = async (target: ScopedThreadRef, opts: { orderKey?: string } = {}) => {
+  const sendPin = async (
+    target: ScopedThreadRef,
+    opts: { orderKey?: string; sectionId?: string | null } = {},
+  ) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
         Cause.fail(
@@ -797,11 +800,15 @@ export function useThreadActions() {
       input: {
         threadId: target.threadId,
         ...(orderKey !== undefined ? { orderKey } : {}),
+        ...(opts.sectionId !== undefined ? { sectionId: opts.sectionId } : {}),
       },
     });
   };
 
-  const pinThread = async (target: ScopedThreadRef, opts: { orderKey?: string } = {}) => {
+  const pinThread = async (
+    target: ScopedThreadRef,
+    opts: { orderKey?: string; sectionId?: string | null } = {},
+  ) => {
     const result = await sendPin(target, opts);
     if (result._tag === "Success") announce(m(msg("Pinned 1 thread")));
     return result;
@@ -898,7 +905,11 @@ export function useThreadActions() {
     return unpinThread(target);
   };
 
-  const reorderPinnedThread = async (target: ScopedThreadRef, orderKey: string) => {
+  const reorderPinnedThread = async (
+    target: ScopedThreadRef,
+    orderKey: string,
+    sectionId?: string | null,
+  ) => {
     if (!readEnvironmentServerConfigLoaded(target.environmentId)) {
       return AsyncResult.failure(
         Cause.fail(
@@ -912,7 +923,11 @@ export function useThreadActions() {
     ThreadUndo.invalidate("pin", scopedThreadKey(target));
     return reorderPinnedThreadMutation({
       environmentId: target.environmentId,
-      input: { threadId: target.threadId, orderKey },
+      input: {
+        threadId: target.threadId,
+        orderKey,
+        ...(sectionId === undefined ? {} : { sectionId }),
+      },
     });
   };
 

@@ -1,9 +1,12 @@
 import type { ProjectId } from "@t3tools/contracts";
 import type { SidebarProjectSortOrder, SidebarThreadSortOrder } from "@t3tools/contracts/settings";
-import { generateSpreadPinOrderKeys, pinOrderKeyBetween } from "@t3tools/shared/pinOrderKey";
 import type { EnvironmentThreadShell } from "./models.ts";
 
-export { generateSpreadPinOrderKeys, pinOrderKeyBetween } from "@t3tools/shared/pinOrderKey";
+export {
+  generateSpreadPinOrderKeys,
+  pinOrderKeyBetween,
+  planOrderKeyMove as planPinnedReorder,
+} from "@t3tools/shared/pinOrderKey";
 
 export interface ThreadSortInput {
   readonly createdAt: string;
@@ -181,39 +184,6 @@ export function getLatestThreadForProject<
     }
   }
   return latest;
-}
-
-export function planPinnedReorder(input: {
-  readonly orderedIds: readonly string[];
-  /** Include retained keys from hidden rows; only orderedIds receive writes. */
-  readonly keysById: ReadonlyMap<string, string | null | undefined>;
-  readonly movedId: string;
-}): ReadonlyArray<{ readonly id: string; readonly orderKey: string }> {
-  const { orderedIds, keysById, movedId } = input;
-  const visibleIds = new Set(orderedIds);
-  const reservedKeys = new Set(
-    [...keysById].flatMap(([id, key]) => (!visibleIds.has(id) && key != null ? [key] : [])),
-  );
-  const movedIndex = orderedIds.indexOf(movedId);
-  if (movedIndex === -1) return [];
-  const beforeId = movedIndex > 0 ? orderedIds[movedIndex - 1] : null;
-  const afterId = movedIndex < orderedIds.length - 1 ? orderedIds[movedIndex + 1] : null;
-  const beforeKey = beforeId != null ? (keysById.get(beforeId) ?? null) : null;
-  const afterKey = afterId != null ? (keysById.get(afterId) ?? null) : null;
-  const beforeUsable = beforeId === null || beforeKey != null;
-  const afterUsable = afterId === null || afterKey != null;
-  if (beforeUsable && afterUsable) {
-    let key = pinOrderKeyBetween(beforeKey, afterKey);
-    while (key !== null && reservedKeys.has(key)) key = pinOrderKeyBetween(key, afterKey);
-    if (key !== null) return [{ id: movedId, orderKey: key }];
-  }
-  const keys = generateSpreadPinOrderKeys(orderedIds.length + reservedKeys.size)
-    .filter((key) => !reservedKeys.has(key))
-    .slice(0, orderedIds.length);
-  return orderedIds.flatMap((id, index) => {
-    const key = keys[index]!;
-    return keysById.get(id) === key ? [] : [{ id, orderKey: key }];
-  });
 }
 
 export function sortPinnedThreadsByOrderKey<

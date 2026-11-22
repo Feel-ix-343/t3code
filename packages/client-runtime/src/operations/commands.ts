@@ -120,11 +120,13 @@ export interface UnsettleThreadInput extends ThreadCommandInput {
 
 export interface PinThreadInput extends ThreadCommandInput {
   readonly orderKey?: string;
+  readonly sectionId?: string | null;
 }
 export type UnpinThreadInput = ThreadCommandInput;
 
 export interface ReorderPinnedThreadInput extends ThreadCommandInput {
   readonly orderKey: string;
+  readonly sectionId?: string | null;
 }
 
 export interface ReorderActiveThreadInput extends ThreadCommandInput {
@@ -600,6 +602,7 @@ export const pinThread = Effect.fn("EnvironmentCommands.pinThread")(function* (
     commandId,
     threadId: input.threadId,
     ...(input.orderKey === undefined ? {} : { orderKey: input.orderKey }),
+    ...(input.sectionId === undefined ? {} : { sectionId: input.sectionId }),
   });
 });
 
@@ -626,6 +629,7 @@ export const reorderPinnedThread = Effect.fn("EnvironmentCommands.reorderPinnedT
     commandId,
     threadId: input.threadId,
     orderKey: input.orderKey,
+    ...(input.sectionId === undefined ? {} : { sectionId: input.sectionId }),
   });
 });
 

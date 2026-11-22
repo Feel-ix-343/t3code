@@ -1,7 +1,11 @@
 import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import type { ContextMenuSource } from "@t3tools/contracts";
+import { BookmarkIcon, EllipsisIcon } from "lucide-react";
 import { type ReactNode, useLayoutEffect } from "react";
+import { contextMenuSourceOf } from "../../contextMenuSource";
+import { Button } from "../ui/button";
 import { cn } from "~/lib/utils";
 import {
   animateSidebarLayoutChanges,
@@ -17,8 +21,26 @@ function SortableSidebarMarker(props: {
   revealOverflow?: boolean;
   "data-testid"?: string;
 }) {
+  return (
+    <SidebarSortableSlot
+      {...props}
+      id={sidebarMarkerId(props.marker)}
+      placeholder={props.marker.endsWith("-placeholder")}
+    />
+  );
+}
+
+/** A list row the dragged thread sorts around; it never drags itself. */
+export function SidebarSortableSlot(props: {
+  id: string;
+  placeholder?: boolean;
+  className?: string;
+  children?: ReactNode;
+  revealOverflow?: boolean;
+  "data-testid"?: string;
+}) {
   const { node, setNodeRef, transform, transition } = useSortable({
-    id: sidebarMarkerId(props.marker),
+    id: props.id,
     disabled: SIDEBAR_SORTABLE_DRAG_DISABLED,
     animateLayoutChanges: animateSidebarLayoutChanges,
   });
@@ -36,7 +58,7 @@ function SortableSidebarMarker(props: {
       className={cn("list-none", props.className)}
       style={{
         transform: CSS.Translate.toString(transform),
-        transition: props.marker.endsWith("-placeholder") ? "none" : transition,
+        transition: props.placeholder ? "none" : transition,
         visibility: transform?.scaleY === 0 ? "hidden" : undefined,
       }}
     >
@@ -143,5 +165,71 @@ export function SidebarSectionHeader(props: {
         {props.label}
       </CollapsibleSectionHeader>
     </SortableSidebarMarker>
+  );
+}
+
+export function SidebarCustomSectionHeader(props: {
+  id: string;
+  title: string;
+  count: number;
+  isDropTarget: boolean;
+  menuLabel: string;
+  onMenu: (position: { x: number; y: number }, source: ContextMenuSource) => void;
+}) {
+  return (
+    <SidebarSortableSlot
+      id={props.id}
+      data-testid="sidebar-custom-section"
+      className="group/custom-section relative mx-0.5 mt-2 h-8"
+    >
+      <div
+        className={cn(
+          "flex h-8 w-full items-center gap-2 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left",
+          props.isDropTarget ? "text-primary" : "text-sidebar-foreground/90",
+        )}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          props.onMenu({ x: event.clientX, y: event.clientY }, contextMenuSourceOf(event));
+        }}
+      >
+        <BookmarkIcon aria-hidden className="size-3.5 shrink-0 text-sidebar-muted-foreground" />
+        <span className="min-w-0 flex-1 truncate text-xs font-medium">{props.title}</span>
+        <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-hover/custom-section:hidden pointer-coarse:hidden">
+          {props.count}
+        </span>
+        <span className="hidden group-hover/custom-section:flex pointer-coarse:flex">
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            aria-label={props.menuLabel}
+            onClick={(event) => {
+              const rect = event.currentTarget.getBoundingClientRect();
+              props.onMenu({ x: rect.left, y: rect.bottom }, contextMenuSourceOf(event));
+            }}
+          >
+            <EllipsisIcon aria-hidden />
+          </Button>
+        </span>
+      </div>
+    </SidebarSortableSlot>
+  );
+}
+
+export function SidebarCustomSectionPlaceholder(props: {
+  id: string;
+  label: string;
+  isDropTarget: boolean;
+}) {
+  return (
+    <SidebarSortableSlot id={props.id} placeholder className="mx-0.5 h-9">
+      <div
+        className={cn(
+          "flex h-9 items-center justify-center rounded-md border border-dashed border-sidebar-foreground/20 text-xs text-sidebar-muted-foreground",
+          props.isDropTarget && "border-primary/40 bg-primary/5 text-primary",
+        )}
+      >
+        {props.label}
+      </div>
+    </SidebarSortableSlot>
   );
 }
