@@ -7,6 +7,7 @@ import {
 import type { SidebarSection } from "@t3tools/contracts/settings";
 import { planOrderKeyMove, sortUnkeyedRecentThenKeyed } from "@t3tools/shared/pinOrderKey";
 import * as DateTime from "effect/DateTime";
+import * as Schema from "effect/Schema";
 
 import type { ActiveShellIndexEntry } from "../../../orchestration-v2/ProjectionStore.ts";
 
@@ -86,7 +87,7 @@ export function folderOrder(
         thread.archivedAt === null &&
         thread.pinnedAt == null &&
         thread.settledOverride !== "settled" &&
-        (thread.snoozedUntil == null || DateTime.lessThanOrEqualTo(thread.snoozedUntil, now)),
+        (thread.snoozedUntil == null || DateTime.isLessThanOrEqualTo(thread.snoozedUntil, now)),
     ),
     {
       key: (thread) => thread.activeOrderKey,
@@ -103,6 +104,8 @@ export function folderOrder(
     },
   );
 }
+
+const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 
 function insertBefore(
   ids: readonly ThreadId[],
@@ -140,9 +143,9 @@ export function planPinnedMove(input: {
     thread.id,
     input.beforeThreadId,
   );
-  if (order instanceof OrchestratorMcpFailure) return order;
+  if (isOrchestratorMcpFailure(order)) return order;
   const keysById = new Map<string, string | null>(
-    list.map((entry) => [entry.id, entry.pinOrderKey]),
+    list.map((entry) => [entry.id, entry.pinOrderKey ?? null]),
   );
   keysById.set(thread.id, sameList ? (thread.pinOrderKey ?? null) : null);
   const assignments = planOrderKeyMove({ orderedIds: order, keysById, movedId: thread.id });
@@ -180,7 +183,7 @@ export function planFolderMove(input: {
     input.threadId,
     input.beforeThreadId,
   );
-  if (order instanceof OrchestratorMcpFailure) return order;
+  if (isOrchestratorMcpFailure(order)) return order;
   const assignments = planOrderKeyMove({
     orderedIds: order,
     keysById: new Map(input.folder.map((thread) => [thread.id, thread.activeOrderKey ?? null])),

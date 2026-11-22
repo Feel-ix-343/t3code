@@ -466,7 +466,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             folder: folderOrder(snapshot.threads, yield* DateTime.now),
           });
         }
-        if (writes instanceof OrchestratorMcpFailure) return yield* writes;
+        if (!Array.isArray(writes)) return yield* writes as OrchestratorMcpFailure;
         let sequence: number | undefined;
         for (const write of writes) {
           const commandId = yield* newCommandId();
