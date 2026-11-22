@@ -12024,6 +12024,7 @@
   "37ffec8201f153c1": "Failed",
   "984b361806ce8d25": "Woke",
   "c6e8abc00ae470d2": "Done",
+  "ac9b345ad21885bb": "Spawned threads",
   "f31a95961de19433": "Issue {key}: {title}, {state}",
   "2dd9d295c882ef65": "{count, plural, one {{count} linked issue} other {{count} linked issues}}",
   "8cf699ae75fd8067": "Pinned",

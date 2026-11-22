@@ -12014,6 +12014,7 @@
   "37ffec8201f153c1": "Échec",
   "984b361806ce8d25": "Réveillé",
   "c6e8abc00ae470d2": "Terminé",
+  "ac9b345ad21885bb": "Fils lancés",
   "f31a95961de19433": "Ticket {key} : {title}, {state}",
   "2dd9d295c882ef65": "{count, plural, one {{count} ticket lié} other {{count} tickets liés}}",
   "8cf699ae75fd8067": "Épinglés",

@@ -42,6 +42,7 @@ import {
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
   CheckIcon,
+  ChevronRightIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -578,6 +579,12 @@ type SidebarThreadRowProps = {
   // "folder" is a one-line row inside a boring sidebar project folder;
   // "folder-multiline" adds the card's branch and PR line under it.
   variant: "card" | "slim" | "folder" | "folder-multiline";
+  /** Steps under the thread that spawned it. */
+  nestDepth?: number | undefined;
+  /** Threads nested below this one; a nonzero count gives the row a disclosure. */
+  nestedCount?: number | undefined;
+  nestCollapsed?: boolean | undefined;
+  onToggleNest?: ((threadKey: string) => void) | undefined;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1036,11 +1043,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     props.sortable?.isDragging &&
       "bg-sidebar bg-linear-to-b from-sidebar-row-active to-sidebar-row-active text-sidebar-foreground opacity-100 shadow-lg",
   );
+  // One step lines a child's title up past its parent's disclosure.
+  const nestIndent = (props.nestDepth ?? 0) > 0 ? `${props.nestDepth}rem` : undefined;
   const sortable = props.sortable;
   const sortableRootProps = sortable
     ? {
         ref: sortable.setNodeRef,
         style: {
+          paddingInlineStart: nestIndent,
           transform: CSS.Translate.toString(sortable.transform),
           transition: sortable.transition,
           // A zero-height boundary also makes dnd-kit scale the source to
@@ -1052,7 +1062,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         },
         ...sortable.listeners,
       }
-    : {};
+    : { style: { paddingInlineStart: nestIndent } };
   const destinationVerb = sortable?.isDragging
     ? props.dropVerb
     : props.sweepAction === "unsnooze"
@@ -1120,6 +1130,31 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ) : null}
     </span>
   );
+
+  const nestedCount = props.nestedCount ?? 0;
+  const onToggleNest = props.onToggleNest;
+  const nestToggle =
+    nestedCount > 0 && onToggleNest !== undefined ? (
+      <button
+        type="button"
+        aria-expanded={!props.nestCollapsed}
+        aria-label={gt("Spawned threads")}
+        data-testid="sidebar-nest-toggle"
+        className="-me-1 flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded-sm text-xs text-sidebar-muted-foreground tabular-nums outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        onPointerDown={(event) => event.stopPropagation()}
+        onKeyDown={(event) => event.stopPropagation()}
+        onClick={(event) => {
+          event.stopPropagation();
+          onToggleNest(threadKey);
+        }}
+      >
+        <ChevronRightIcon
+          aria-hidden
+          className={cn("size-3 transition-transform", !props.nestCollapsed && "rotate-90")}
+        />
+        {props.nestCollapsed ? nestedCount : null}
+      </button>
+    ) : null;
 
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
@@ -1397,6 +1432,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 </span>
               )}
               {draftIndicator}
+              {nestToggle}
               {title}
               {multiline ? titleLineIcons : null}
               {/* Folder-style pinned rows sit under a pinned header; unpin lives in the … menu. */}
@@ -1758,6 +1794,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {props.sweepAction !== null ? dragDestination : null}
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
+              {nestToggle}
               {title}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">

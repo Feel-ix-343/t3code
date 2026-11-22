@@ -12022,6 +12022,7 @@
   "37ffec8201f153c1": "Misslyckades",
   "984b361806ce8d25": "Väckt",
   "c6e8abc00ae470d2": "Klar",
+  "ac9b345ad21885bb": "Startade trådar",
   "f31a95961de19433": "Ärende {key}: {title}, {state}",
   "2dd9d295c882ef65": "{count, plural, one {{count} länkat ärende} other {{count} länkade ärenden}}",
   "8cf699ae75fd8067": "Fäst",

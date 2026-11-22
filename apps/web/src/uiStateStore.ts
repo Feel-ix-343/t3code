@@ -33,6 +33,7 @@ export interface PersistedUiState {
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
   pullRequestMergeMethod?: string;
   collapsedSidebarSectionIds?: string[];
+  collapsedSidebarThreadKeys?: string[];
 }
 
 export interface UiProjectState {
@@ -40,6 +41,8 @@ export interface UiProjectState {
   projectOrder: string[];
   sidebarProjectScopeKeys: string[];
   collapsedSidebarSectionIds: string[];
+  /** Threads whose spawned threads the sidebar hides. */
+  collapsedSidebarThreadKeys: string[];
 }
 
 export interface UiThreadState {
@@ -63,6 +66,7 @@ const initialState: UiState = {
   projectOrder: [],
   sidebarProjectScopeKeys: [],
   collapsedSidebarSectionIds: [],
+  collapsedSidebarThreadKeys: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
@@ -160,6 +164,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
     collapsedSidebarSectionIds: sanitizeStringArray(parsed.collapsedSidebarSectionIds),
+    collapsedSidebarThreadKeys: sanitizeStringArray(parsed.collapsedSidebarThreadKeys),
   };
 }
 
@@ -235,6 +240,7 @@ export function persistState(state: UiState): void {
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
         collapsedSidebarSectionIds: state.collapsedSidebarSectionIds,
+        collapsedSidebarThreadKeys: state.collapsedSidebarThreadKeys,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -383,17 +389,16 @@ export function setProjectExpanded(
   };
 }
 
-function setSidebarSectionCollapsed(
+function setCollapsedIn(
   state: UiState,
-  sectionId: string,
+  field: "collapsedSidebarSectionIds" | "collapsedSidebarThreadKeys",
+  id: string,
   collapsed: boolean,
 ): UiState {
-  if (state.collapsedSidebarSectionIds.includes(sectionId) === collapsed) return state;
+  if (state[field].includes(id) === collapsed) return state;
   return {
     ...state,
-    collapsedSidebarSectionIds: collapsed
-      ? [...state.collapsedSidebarSectionIds, sectionId]
-      : state.collapsedSidebarSectionIds.filter((id) => id !== sectionId),
+    [field]: collapsed ? [...state[field], id] : state[field].filter((entry) => entry !== id),
   };
 }
 
@@ -450,6 +455,7 @@ interface UiStateStore extends UiState {
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
   setSidebarSectionCollapsed: (sectionId: string, collapsed: boolean) => void;
+  setSidebarThreadNestCollapsed: (threadKey: string, collapsed: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
     draggedProjectIds: readonly string[],
@@ -473,7 +479,9 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
   setSidebarSectionCollapsed: (sectionId, collapsed) =>
-    set((state) => setSidebarSectionCollapsed(state, sectionId, collapsed)),
+    set((state) => setCollapsedIn(state, "collapsedSidebarSectionIds", sectionId, collapsed)),
+  setSidebarThreadNestCollapsed: (threadKey, collapsed) =>
+    set((state) => setCollapsedIn(state, "collapsedSidebarThreadKeys", threadKey, collapsed)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>
     set((state) =>
       reorderProjects(state, currentProjectOrder, draggedProjectIds, targetProjectIds),

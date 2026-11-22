@@ -12016,6 +12016,7 @@
   "37ffec8201f153c1": "Fehlgeschlagen",
   "984b361806ce8d25": "Aufgeweckt",
   "c6e8abc00ae470d2": "Fertig",
+  "ac9b345ad21885bb": "Gestartete Threads",
   "f31a95961de19433": "Issue {key}: {title}, {state}",
   "2dd9d295c882ef65": "{count, plural, one {{count} verknüpftes Issue} other {{count} verknüpfte Issues}}",
   "8cf699ae75fd8067": "Angeheftet",

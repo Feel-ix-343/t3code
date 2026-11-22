@@ -12039,6 +12039,7 @@
   "37ffec8201f153c1": "失败",
   "984b361806ce8d25": "已唤醒",
   "c6e8abc00ae470d2": "完成",
+  "ac9b345ad21885bb": "派生的线程",
   "f31a95961de19433": "议题 {key}：{title}，{state}",
   "2dd9d295c882ef65": "{count, plural, other {{count} 个关联议题}}",
   "8cf699ae75fd8067": "已置顶",

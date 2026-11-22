@@ -227,7 +227,17 @@ export function sidebarMarkerId(marker: SidebarListMarker): string {
 }
 
 export type SidebarListItem =
-  | { readonly kind: "thread"; readonly key: string; readonly section: SidebarSection }
+  | {
+      readonly kind: "thread";
+      readonly key: string;
+      readonly section: SidebarSection;
+      /** Nesting under the thread that spawned it, when that thread is in the same list. */
+      readonly nest?: {
+        readonly depth: number;
+        readonly descendantCount: number;
+        readonly collapsed: boolean;
+      };
+    }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker }
   // Project-folder mode only: a user-named section's header or empty-section drop slot.
   | { readonly kind: "custom-section"; readonly sectionId: string; readonly placeholder: boolean }

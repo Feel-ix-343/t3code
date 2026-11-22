@@ -244,6 +244,7 @@ import {
   restrictBelowSidebarLabel,
 } from "./Sidebar.drag";
 import { SidebarPointerSensor } from "./Sidebar.pointer";
+import { nestSidebarThreads, sidebarNestParentId } from "./sidebar/sidebarNesting.logic";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import { createSidebarShiftGuard } from "./Sidebar.shiftGuard";
 import {
@@ -2024,15 +2025,35 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const hasProjectFolders = projectFolders !== null && projectFolders.length > 0;
   const collapsedSidebarSectionIds = useUiStateStore((state) => state.collapsedSidebarSectionIds);
   const setSidebarSectionCollapsed = useUiStateStore((state) => state.setSidebarSectionCollapsed);
+  const collapsedSidebarThreadKeys = useUiStateStore((state) => state.collapsedSidebarThreadKeys);
+  const toggleThreadNest = useStableCallback((threadKey: string) => {
+    const { collapsedSidebarThreadKeys: collapsed, setSidebarThreadNestCollapsed } =
+      useUiStateStore.getState();
+    setSidebarThreadNestCollapsed(threadKey, !collapsed.includes(threadKey));
+  });
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
       section: SidebarSection,
     ): SidebarListItem[] =>
-      list.map((thread) => {
-        const key = scopedThreadKey(scopeThreadRef(thread.environmentId, thread.id));
-        return { kind: "thread", key, section };
-      });
+      nestSidebarThreads(list, {
+        keyOf: threadShellKey,
+        parentKeyOf: (thread) => {
+          const parentId = sidebarNestParentId(thread.lineage);
+          return parentId === null
+            ? null
+            : scopedThreadKey(scopeThreadRef(thread.environmentId, parentId));
+        },
+        isCollapsed: (key) => collapsedSidebarThreadKeys.includes(key),
+        keepVisibleKey: routeRowThreadKey,
+      }).map(({ thread, depth, descendantCount, collapsed }) => ({
+        kind: "thread",
+        key: threadShellKey(thread),
+        section,
+        ...(depth === 0 && descendantCount === 0
+          ? {}
+          : { nest: { depth, descendantCount, collapsed } }),
+      }));
     // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
       !hasProjectFolders &&
@@ -2087,7 +2108,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   // Preserve the list while streamed updates leave order unchanged to retain row memoization.
   const sidebarListItemsKey = sidebarListItemsFresh
     .map((item) =>
-      item.kind === "thread" ? item.section + ":" + item.key : sidebarListItemId(item),
+      item.kind === "thread"
+        ? `${item.section}:${item.key}:${item.nest?.depth ?? 0}:${item.nest?.descendantCount ?? 0}:${item.nest?.collapsed ?? false}`
+        : sidebarListItemId(item),
     )
     .join("\n");
   const [sidebarListItemsState, setSidebarListItems] = useState(sidebarListItemsFresh);
@@ -3952,6 +3975,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                       const renderThreadRow = (
                         thread: EnvironmentThreadShell,
                         section: SidebarSection,
+                        nest: Extract<SidebarListItem, { kind: "thread" }>["nest"],
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
                       ) => {
@@ -3983,6 +4007,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
+                            nestDepth={nest?.depth ?? 0}
+                            nestedCount={nest?.descendantCount ?? 0}
+                            nestCollapsed={nest?.collapsed ?? false}
+                            onToggleNest={toggleThreadNest}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -4095,6 +4123,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             renderThreadRow(
                               threadByKey.get(item.key)!,
                               item.section,
+                              item.nest,
                               item.section === "active" ? folderRow : undefined,
                             ),
                           );
