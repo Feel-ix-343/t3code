@@ -31,10 +31,13 @@ import * as ScheduledTaskService from "../../../scheduledTasks/ScheduledTaskServ
 import * as ThreadManagementService from "../../../orchestration-v2/ThreadManagementService.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as AgentSessionImporter from "../../../project/AgentSessionImporter.ts";
+import * as AgentSessionScanner from "../../../project/AgentSessionScanner.ts";
+import * as ProjectService from "../../../project/ProjectService.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, move, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. `pin` with `sectionId` pins into that sidebar section (see `t3_sidebar_section`); null is plain Pinned. `move` reorders a pinned thread in its list or an active one in its project folder: before `beforeThreadId`, or omit it for the end; with `sectionId` it moves (and pins) into that list. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
+    "Pin, snooze, settle, archive, move, nest, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. `pin` with `sectionId` pins into that sidebar section (see `t3_sidebar_section`); null is plain Pinned. `move` reorders a pinned thread in its list or an active one in its project folder: before `beforeThreadId`, or omit it for the end; with `sectionId` it moves (and pins) into that list. `nest` shows it under `parentThreadId` (same project); `unnest` stops nesting it under the thread that spawned it, and with `sectionId`/`beforeThreadId` also moves it. A moved thread is unnested. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),
@@ -49,10 +52,13 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
       "archive",
       "unarchive",
       "mark_unread",
+      "nest",
+      "unnest",
     ]),
     snoozedUntil: Schema.optional(IsoDateTime),
     sectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     beforeThreadId: Schema.optional(Schema.NullOr(ThreadId)),
+    parentThreadId: Schema.optional(ThreadId),
   }),
   success: Schema.Union([
     OrchestrationV2DispatchCommandResult,
@@ -96,6 +102,70 @@ const SidebarSectionTool = Tool.make("t3_sidebar_section", {
 })
   .annotate(Tool.Title, "Manage sidebar sections")
   .annotate(Tool.Strict, true)
+  .annotate(Tool.Destructive, true);
+
+const SyncedThread = Schema.Struct({ threadId: ThreadId, title: Schema.optional(Schema.String) });
+const SkipCounts = Schema.Record(Schema.String, NonNegativeInt);
+const ClaudeSessionsSyncTool = Tool.make("t3_claude_sessions_sync", {
+  description:
+    "Bring the user's Claude Code sessions into T3 up to date: import new ones, catch earlier imports up with their transcripts, nest them as the Claude desktop app does, and mirror its sidebar sections and starred sessions as T3 sections and pins (never deletes, renames, or unpins). `projectId`: one project, else all. `dryRun`: report only. `applySections`/`applyPins` false skip those. Only when the user asks.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    projectId: Schema.optional(ProjectId),
+    dryRun: Schema.optional(Schema.Boolean),
+    applySections: Schema.optional(Schema.Boolean),
+    applyPins: Schema.optional(Schema.Boolean),
+  }),
+  success: Schema.Struct({
+    dryRun: Schema.Boolean,
+    projects: Schema.Array(
+      Schema.Struct({
+        projectId: ProjectId,
+        title: Schema.String,
+        imported: NonNegativeInt,
+        refreshed: NonNegativeInt,
+        unchanged: NonNegativeInt,
+        nested: NonNegativeInt,
+        skipped: SkipCounts,
+        error: Schema.optional(Schema.String),
+      }),
+    ),
+    totals: Schema.Struct({
+      imported: NonNegativeInt,
+      refreshed: NonNegativeInt,
+      unchanged: NonNegativeInt,
+      nested: NonNegativeInt,
+      skipped: SkipCounts,
+    }),
+    refreshedThreadIds: Schema.Array(ThreadId),
+    sectionsCreated: Schema.Array(Schema.String),
+    moved: Schema.Array(
+      Schema.Struct({
+        ...SyncedThread.fields,
+        from: Schema.NullOr(Schema.String),
+        to: Schema.String,
+      }),
+    ),
+    pinned: Schema.Array(SyncedThread),
+    claudeDesktop: Schema.Struct({
+      sections: NonNegativeInt,
+      assignedSessions: NonNegativeInt,
+      starredSessions: NonNegativeInt,
+    }),
+  }),
+  failure: OrchestratorMcpFailure,
+  failureMode: "return" as const,
+  dependencies: [
+    McpInvocationContext.McpInvocationContext,
+    ThreadManagementService.ThreadManagementService,
+    ServerSettings.ServerSettingsService,
+    SecureRandom.SecureRandom,
+    ProjectService.ProjectService,
+    AgentSessionImporter.AgentSessionImporter,
+    AgentSessionScanner.AgentSessionScanner,
+  ],
+})
+  .annotate(Tool.Title, "Sync Claude Code sessions")
   .annotate(Tool.Destructive, true);
 
 const commandTool = {
@@ -294,6 +364,7 @@ export const ThreadToolkit = Toolkit.make(
   ThreadTransferTool,
   ThreadOrganizeTool,
   SidebarSectionTool,
+  ClaudeSessionsSyncTool,
   PendingRequestTool,
   QueueTool,
   SubmitOutputTool,

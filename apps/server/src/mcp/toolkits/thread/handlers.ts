@@ -2,6 +2,7 @@ import {
   type CommandId,
   type RuntimeRequestId,
   ThreadId,
+  threadNestParentId,
   type OrchestrationV2ThreadProjection,
   type RunId,
   OrchestratorMcpFailure,
@@ -36,6 +37,7 @@ import {
   planFolderMove,
   planPinnedMove,
 } from "./sidebarArrangement.ts";
+import { syncClaudeSessions } from "./claudeSessionSync.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -415,12 +417,39 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
     Effect.gen(function* () {
       const { threads, projection, caller } = yield* readThread(input.threadId);
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
+      const setNestParent = Effect.fn("mcp.setNestParent")(function* (
+        parentThreadId: ThreadId | null,
+      ) {
+        const result = yield* threads
+          .dispatch({
+            type: "thread.nest.set",
+            commandId: yield* newCommandId(),
+            threadId: projection.thread.id,
+            parentThreadId,
+          })
+          .pipe(Effect.mapError(dispatchFailure));
+        return { sequence: result.sequence };
+      });
+      if (input.action === "nest") {
+        return yield* setNestParent(yield* required(input.parentThreadId, "parentThreadId"));
+      }
+      if (
+        input.action === "unnest" &&
+        input.sectionId === undefined &&
+        input.beforeThreadId === undefined
+      ) {
+        return yield* setNestParent(null);
+      }
       if (input.action === "settle") {
         return yield* threads
           .settleThread({ ...common, byOwnAgent: caller?.id === projection.thread.id })
           .pipe(Effect.mapError(dispatchFailure));
       }
-      if (input.action === "move" || (input.action === "pin" && input.sectionId !== undefined)) {
+      if (
+        input.action === "move" ||
+        input.action === "unnest" ||
+        (input.action === "pin" && input.sectionId !== undefined)
+      ) {
         const settings = yield* ServerSettings.ServerSettingsService;
         const { sidebarSections: sections } = yield* settings.getSettings.pipe(
           Effect.mapError(unavailable),
@@ -486,6 +515,10 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           sequence = result.sequence;
         }
         if (sequence === undefined) return yield* unavailable();
+        // A nested thread moved elsewhere no longer sits under its parent.
+        if (input.action === "unnest" || threadNestParentId(thread.lineage) !== null) {
+          return yield* setNestParent(null);
+        }
         return { sequence };
       }
       let command: OrchestrationV2Command;
@@ -520,6 +553,11 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       const result = yield* threads.dispatch(command).pipe(Effect.mapError(dispatchFailure));
       return { sequence: result.sequence };
     }),
+  ),
+  t3_claude_sessions_sync: McpToolAccess.either(
+    (input) => input.dryRun === true,
+    McpToolAccess.reads((input) => syncClaudeSessions(input)),
+    McpToolAccess.writes((input) => syncClaudeSessions(input)),
   ),
   t3_sidebar_section: McpToolAccess.either(
     (input) => input.action === "list",

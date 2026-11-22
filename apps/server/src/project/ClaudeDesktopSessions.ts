@@ -26,6 +26,8 @@ const DesktopSession = Schema.Struct({
   ),
   forkedFromSessionId: Schema.optional(Schema.NullOr(Schema.String)),
   lineageDetached: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  isStarred: Schema.optional(Schema.NullOr(Schema.Boolean)),
+  isArchived: Schema.optional(Schema.NullOr(Schema.Boolean)),
 });
 const decodeDesktopSession = Schema.decodeUnknownOption(Schema.fromJsonString(DesktopSession));
 
@@ -53,29 +55,115 @@ export function parseClaudeDesktopLineage(
   return lineage;
 }
 
+/** How the Claude desktop app organizes its Claude Code sessions in its sidebar. */
+export interface ClaudeDesktopOrganization {
+  /** The sections the user named, in sidebar order. */
+  readonly sections: ReadonlyArray<{ readonly id: string; readonly name: string }>;
+  /** Each assigned session's section id, by CLI session id. */
+  readonly sectionBySession: ReadonlyMap<string, string>;
+  /** CLI session ids of starred (pinned) sessions, in the desktop app's pinned order. */
+  readonly starred: ReadonlyArray<string>;
+}
+
+const isRecord = (value: unknown): value is Record<string, unknown> =>
+  typeof value === "object" && value !== null && !Array.isArray(value);
+const records = (value: unknown): Array<Record<string, unknown>> =>
+  Array.isArray(value) ? value.filter(isRecord) : [];
+const strings = (value: unknown): Array<string> =>
+  Array.isArray(value) ? value.filter((entry): entry is string => typeof entry === "string") : [];
+const DESKTOP_CODE_SESSION_PREFIX = "code:";
+
+/**
+ * Reads `preferences.epitaxyPrefs` of `claude_desktop_config.json`: sections
+ * (`dframe-code-sections`), assignments (`dframe-group-scopes`), and stars in pinned order.
+ * Metadata files map desktop session ids to CLI ones; archived sessions are left out.
+ */
+export function parseClaudeDesktopOrganization(
+  config: string,
+  metadataContents: ReadonlyArray<string>,
+): ClaudeDesktopOrganization {
+  const sessions = metadataContents.flatMap((text) => Option.toArray(decodeDesktopSession(text)));
+  const live = new Map(
+    sessions
+      .filter((session) => session.isArchived !== true)
+      .map((session) => [session.sessionId, session] as const),
+  );
+  let prefs: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(config);
+    const preferences = isRecord(parsed) ? parsed["preferences"] : undefined;
+    const epitaxy = isRecord(preferences) ? preferences["epitaxyPrefs"] : undefined;
+    if (isRecord(epitaxy)) prefs = epitaxy;
+  } catch {
+    // An unreadable config organizes nothing.
+  }
+  const scopes = (key: string) => {
+    const value = prefs[key];
+    return isRecord(value) ? Object.values(value).filter(isRecord) : [];
+  };
+
+  const sections: Array<{ id: string; name: string }> = [];
+  const seenSections = new Set<string>();
+  const addSection = (id: unknown, name: unknown) => {
+    if (typeof id !== "string" || typeof name !== "string" || name.trim() === "") return;
+    if (seenSections.has(id)) return;
+    seenSections.add(id);
+    sections.push({ id, name: name.trim() });
+  };
+  for (const scope of scopes("dframe-code-sections")) {
+    const manual = records(scope["sections"])
+      .filter((section) => section["kind"] === "manual")
+      .toSorted((left, right) => Number(left["order"] ?? 0) - Number(right["order"] ?? 0));
+    for (const section of manual) addSection(section["id"], section["name"]);
+  }
+  const sectionBySession = new Map<string, string>();
+  for (const scope of scopes("dframe-group-scopes")) {
+    // Groups the sections list does not name yet still have their own names.
+    for (const group of records(scope["groups"])) addSection(group["id"], group["name"]);
+    const assignments = scope["assignments"];
+    if (!isRecord(assignments)) continue;
+    for (const [key, sectionId] of Object.entries(assignments)) {
+      if (!key.startsWith(DESKTOP_CODE_SESSION_PREFIX) || typeof sectionId !== "string") continue;
+      const session = live.get(key.slice(DESKTOP_CODE_SESSION_PREFIX.length));
+      if (session === undefined || !seenSections.has(sectionId)) continue;
+      sectionBySession.set(session.cliSessionId, sectionId);
+    }
+  }
+
+  const starredIds = new Set([
+    ...strings(prefs["starred-local-code-sessions"]),
+    ...sessions.flatMap((session) => (session.isStarred === true ? [session.sessionId] : [])),
+  ]);
+  const slice = prefs["dframe-local-slice"];
+  const pinnedOrder = strings(isRecord(slice) ? slice["pinnedOrder"] : undefined).map((key) =>
+    key.startsWith(DESKTOP_CODE_SESSION_PREFIX)
+      ? key.slice(DESKTOP_CODE_SESSION_PREFIX.length)
+      : key,
+  );
+  const starred: Array<string> = [];
+  for (const desktopId of [...pinnedOrder, ...starredIds]) {
+    const session = live.get(desktopId);
+    if (!starredIds.has(desktopId) || session === undefined) continue;
+    if (!starred.includes(session.cliSessionId)) starred.push(session.cliSessionId);
+  }
+  return { sections, sectionBySession, starred };
+}
+
 // Larger files carry long cached prompts; their lineage is not worth the read.
 const MAX_METADATA_FILE_BYTES = 4 * 1024 * 1024;
 
-/**
- * Reads `<home>/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json`.
- * Only the macOS desktop app is known to write these; elsewhere the map is empty.
- */
-export const readClaudeDesktopLineage = Effect.fn("ClaudeDesktopSessions.readLineage")(function* (
+const claudeDesktopRoot = (path: Path.Path, homeDir: string) =>
+  path.join(homeDir, "Library", "Application Support", "Claude");
+
+/** The contents of `<home>/Library/Application Support/Claude/claude-code-sessions/<account>/<org>/local_*.json`. */
+const readDesktopSessionFiles = Effect.fn("ClaudeDesktopSessions.readSessionFiles")(function* (
   homeDir: string,
-  platform: string,
 ) {
-  if (platform !== "darwin") return new Map<string, ClaudeDesktopLineage>();
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const list = (directory: string) =>
     fileSystem.readDirectory(directory).pipe(Effect.orElseSucceed((): ReadonlyArray<string> => []));
-  const root = path.join(
-    homeDir,
-    "Library",
-    "Application Support",
-    "Claude",
-    "claude-code-sessions",
-  );
+  const root = path.join(claudeDesktopRoot(path, homeDir), "claude-code-sessions");
   const files: Array<string> = [];
   for (const account of yield* list(root)) {
     for (const org of yield* list(path.join(root, account))) {
@@ -87,7 +175,7 @@ export const readClaudeDesktopLineage = Effect.fn("ClaudeDesktopSessions.readLin
       }
     }
   }
-  const contents = yield* Effect.forEach(
+  return yield* Effect.forEach(
     files,
     (file) =>
       fileSystem.stat(file).pipe(
@@ -100,5 +188,35 @@ export const readClaudeDesktopLineage = Effect.fn("ClaudeDesktopSessions.readLin
       ),
     { concurrency: 8 },
   );
-  return parseClaudeDesktopLineage(contents);
 });
+
+/**
+ * Reads the lineage the desktop app records in its session metadata files.
+ * Only the macOS desktop app is known to write these; elsewhere the map is empty.
+ */
+export const readClaudeDesktopLineage = Effect.fn("ClaudeDesktopSessions.readLineage")(function* (
+  homeDir: string,
+  platform: string,
+) {
+  if (platform !== "darwin") return new Map<string, ClaudeDesktopLineage>();
+  return parseClaudeDesktopLineage(yield* readDesktopSessionFiles(homeDir));
+});
+
+/** Reads the desktop app's sidebar organization (macOS); elsewhere it is empty. */
+export const readClaudeDesktopOrganization = Effect.fn("ClaudeDesktopSessions.readOrganization")(
+  function* (homeDir: string, platform: string) {
+    const empty: ClaudeDesktopOrganization = {
+      sections: [],
+      sectionBySession: new Map(),
+      starred: [],
+    };
+    if (platform !== "darwin") return empty;
+    const fileSystem = yield* FileSystem.FileSystem;
+    const path = yield* Path.Path;
+    const config = yield* fileSystem
+      .readFileString(path.join(claudeDesktopRoot(path, homeDir), "claude_desktop_config.json"))
+      .pipe(Effect.orElseSucceed(() => ""));
+    if (config === "") return empty;
+    return parseClaudeDesktopOrganization(config, yield* readDesktopSessionFiles(homeDir));
+  },
+);

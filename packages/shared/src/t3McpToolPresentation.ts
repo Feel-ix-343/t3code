@@ -399,6 +399,10 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
     ["Organize", "Organizing", "Organized", "sidebar sections"],
     "thread-organize",
   ),
+  t3_claude_sessions_sync: tool(
+    ["Sync", "Syncing", "Synced", "Claude Code sessions"],
+    "thread-organize",
+  ),
   t3_thread_update: tool(["Update", "Updating", "Updated", "T3 thread metadata"], "thread-update"),
   t3_worktree_list: tool(["List", "Listing", "Listed", "workspace branches"], "worktree-list"),
   t3_preview_list: tool(["List", "Listing", "Listed", "preview tabs"], "browser", "browser"),

@@ -52,6 +52,8 @@ import type * as ProjectionStore from "../../orchestration-v2/ProjectionStore.ts
 import * as ThreadSearch from "../../orchestration-v2/ThreadSearch.ts";
 import * as PreviewBrowser from "../../preview/PreviewBrowser.ts";
 import * as ProjectService from "../../project/ProjectService.ts";
+import * as AgentSessionImporter from "../../project/AgentSessionImporter.ts";
+import * as AgentSessionScanner from "../../project/AgentSessionScanner.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as RemoteDelegation from "../../peer/RemoteDelegation.ts";
@@ -86,16 +88,30 @@ const decodeThreadSearchResult = Schema.decodeUnknownEffect(
   ThreadToolkit.tools.t3_thread_search.successSchema,
 );
 
+const layerNoSessionSync = Layer.mergeAll(
+  Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
+  Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
+  Layer.mock(ProjectService.ProjectService)({}),
+);
+
 const threadToolkitWithSettings = (
   settings: Parameters<typeof ServerSettings.ServerSettingsService.layerTest>[0] = {},
+  sessions: {
+    readonly importer?: Partial<AgentSessionImporter.AgentSessionImporter["Service"]>;
+    readonly scanner?: Partial<AgentSessionScanner.AgentSessionScanner["Service"]>;
+    readonly projects?: Partial<ProjectService.ProjectService["Service"]>;
+  } = {},
 ) =>
   McpHttpServer.layerThreadToolkit.pipe(
+    Layer.provide(Layer.mock(AgentSessionImporter.AgentSessionImporter)(sessions.importer ?? {})),
+    Layer.provide(Layer.mock(AgentSessionScanner.AgentSessionScanner)(sessions.scanner ?? {})),
+    Layer.provide(Layer.mock(ProjectService.ProjectService)(sessions.projects ?? {})),
     Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
     Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
     Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
     Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
-    Layer.provide(ServerSettings.ServerSettingsService.layerTest(settings)),
+    Layer.provideMerge(ServerSettings.ServerSettingsService.layerTest(settings)),
   );
 const layerThreadToolkit = threadToolkitWithSettings();
 
@@ -1028,6 +1044,7 @@ it.effect("search names the calling thread, so an agent can tell its own match a
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(layerNoSessionSync),
         Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
@@ -1270,6 +1287,7 @@ it.effect.each([
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(layerNoSessionSync),
         Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
@@ -1310,6 +1328,7 @@ it.effect("run_scheduled_task_now reports why a started run failed to dispatch",
   }).pipe(
     Effect.provide(
       McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(layerNoSessionSync),
         Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
@@ -1791,3 +1810,260 @@ it.effect(
     );
   },
 );
+
+it.effect("MCP nest and unnest set a thread's placement, and a move unnests it", () => {
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  const pinnedAt = DateTime.makeUnsafe("2026-11-10T00:00:00.000Z");
+  const parentId = ThreadId.make("spawner");
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (args: Record<string, unknown>) =>
+      server
+        .callTool({ name: "t3_thread_organize", arguments: { threadId: "spawned", ...args } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+    expect(declaredFailure(yield* call({ action: "nest" }))).toMatchObject({
+      code: "invalid_request",
+    });
+    expect((yield* call({ action: "nest", parentThreadId: "other" })).isError).toBe(false);
+    expect((yield* call({ action: "unnest" })).isError).toBe(false);
+    expect(dispatched).toEqual([
+      expect.objectContaining({ type: "thread.nest.set", parentThreadId: "other" }),
+      expect.objectContaining({ type: "thread.nest.set", parentThreadId: null }),
+    ]);
+
+    dispatched.length = 0;
+    expect((yield* call({ action: "move", sectionId: "work" })).isError).toBe(false);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        type: "thread.pin.reorder",
+        threadId: "spawned",
+        sectionId: "work",
+      }),
+      expect.objectContaining({
+        type: "thread.nest.set",
+        threadId: "spawned",
+        parentThreadId: null,
+      }),
+    ]);
+
+    dispatched.length = 0;
+    expect((yield* call({ action: "unnest", sectionId: null })).isError).toBe(false);
+    expect(dispatched.map((command) => command.type)).toEqual([
+      "thread.pin.reorder",
+      "thread.nest.set",
+    ]);
+  }).pipe(
+    Effect.provide(
+      threadToolkitWithSettings({ sidebarSections: [{ id: "work", title: "Work" }] }).pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(McpToolAccessTestkit.liveThreadShell(id, { runtimeMode: "auto" })),
+            getProjectThreadRecords: ({ threadId: id }) => {
+              const projection = McpToolAccessTestkit.idleThreadProjection(
+                McpToolAccessTestkit.liveThreadShell(id, { runtimeMode: "auto" }),
+              );
+              return Effect.succeed({
+                ...projection,
+                thread: {
+                  ...projection.thread,
+                  pinnedAt,
+                  pinOrderKey: "m",
+                  pinSectionId: null,
+                  lineage: { ...projection.thread.lineage, spawnedBy: parentId },
+                },
+              });
+            },
+            listActiveShellIndex: () =>
+              Effect.succeed([
+                {
+                  ...McpToolAccessTestkit.liveThreadShell(ThreadId.make("spawned")),
+                  pinnedAt,
+                  pinOrderKey: "m",
+                  pinSectionId: null,
+                  mayBeLive: false,
+                  hasRemoteTasks: false,
+                },
+              ]),
+            dispatch: (command) => {
+              dispatched.push(command);
+              return Effect.succeed({ sequence: dispatched.length, storedEvents: [] });
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
+it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and stars", () => {
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  const imports: Array<{ readonly dryRun: boolean }> = [];
+  const pinnedAt = DateTime.makeUnsafe("2026-11-10T00:00:00.000Z");
+  const projectId = ProjectId.make("project:mcp-test");
+  const claudeThread = (
+    session: string,
+    pin?: { readonly key: string; readonly section: string | null },
+  ) => ({
+    ...McpToolAccessTestkit.liveThreadShell(ThreadId.make(`import:claudeAgent:${session}`)),
+    pinnedAt: pin === undefined ? null : pinnedAt,
+    pinOrderKey: pin?.key ?? null,
+    pinSectionId: pin?.section ?? null,
+    mayBeLive: false,
+    hasRemoteTasks: false,
+  });
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const sync = (args: Record<string, unknown>) =>
+      server
+        .callTool({ name: "t3_claude_sessions_sync", arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+
+    const dry = yield* sync({ dryRun: true });
+    expect(dry.isError).toBe(false);
+    expect(dispatched).toEqual([]);
+    expect((yield* settings.getSettings).sidebarSections).toEqual([
+      { id: "fin", title: "FinSearch" },
+      { id: "mine", title: "Mine" },
+    ]);
+    const expected = {
+      totals: { imported: 1, refreshed: 1, unchanged: 3, nested: 1, skipped: { diverged: 1 } },
+      sectionsCreated: ["Legal"],
+      moved: [
+        // A brand-new import lands in its section; a thread already there stays put.
+        { threadId: "import:claudeAgent:in-mine", from: "Mine", to: "FinSearch" },
+        { threadId: "import:claudeAgent:new", from: null, to: "FinSearch" },
+        { threadId: "import:claudeAgent:legal", from: null, to: "Legal" },
+      ],
+      pinned: [{ threadId: "import:claudeAgent:starred" }],
+      claudeDesktop: { sections: 2, assignedSessions: 5, starredSessions: 2 },
+    };
+    expect(dry.structuredContent).toMatchObject({ dryRun: true, ...expected });
+
+    const applied = yield* sync({});
+    expect(applied.structuredContent).toMatchObject({
+      dryRun: false,
+      ...expected,
+      // The mock import created nothing new this time.
+      totals: { ...expected.totals, imported: 0 },
+      moved: expected.moved.filter((move) => move.threadId !== "import:claudeAgent:new"),
+    });
+    expect(imports).toEqual([{ dryRun: true }, { dryRun: false }]);
+    const sections = (yield* settings.getSettings).sidebarSections;
+    expect(sections.map((section) => section.title)).toEqual(["FinSearch", "Mine", "Legal"]);
+    const legalId = sections[2]!.id;
+    // Moves may also rekey neighbors; these are the writes that place each thread.
+    expect(dispatched.filter((command) => "sectionId" in command)).toEqual([
+      expect.objectContaining({
+        type: "thread.pin.reorder",
+        threadId: "import:claudeAgent:in-mine",
+        sectionId: "fin",
+      }),
+      expect.objectContaining({
+        type: "thread.pin",
+        threadId: "import:claudeAgent:legal",
+        sectionId: legalId,
+      }),
+      expect.objectContaining({
+        type: "thread.pin",
+        threadId: "import:claudeAgent:starred",
+        sectionId: null,
+      }),
+    ]);
+  }).pipe(
+    Effect.provide(
+      threadToolkitWithSettings(
+        {
+          sidebarSections: [
+            { id: "fin", title: "FinSearch" },
+            { id: "mine", title: "Mine" },
+          ],
+        },
+        {
+          projects: {
+            listPage: () =>
+              Effect.succeed({
+                projects: [
+                  {
+                    id: projectId,
+                    title: "master",
+                    workspaceRoot: "/repo",
+                    defaultModelSelection: null,
+                    scripts: [],
+                    createdAt: "2026-11-01T00:00:00.000Z",
+                    updatedAt: "2026-11-01T00:00:00.000Z",
+                    deletedAt: null,
+                  },
+                ],
+                nextCursor: null,
+              }),
+          },
+          importer: {
+            importAgentThreads: (_input, options) => {
+              imports.push({ dryRun: options?.dryRun === true });
+              return Effect.succeed({
+                imported: options?.dryRun === true ? [ThreadId.make("import:claudeAgent:new")] : [],
+                refreshed: [ThreadId.make("import:claudeAgent:in-fin")],
+                unchangedCount: 3,
+                linked: [ThreadId.make("import:claudeAgent:legal")],
+                skipped: { diverged: 1 },
+                skippedCount: 1,
+              });
+            },
+          },
+          scanner: {
+            claudeDesktopOrganization: Effect.succeed({
+              sections: [
+                { id: "cg-fin", name: "FinSearch" },
+                { id: "cg-legal", name: "Legal" },
+              ],
+              sectionBySession: new Map([
+                ["in-fin", "cg-fin"],
+                ["in-mine", "cg-fin"],
+                ["new", "cg-fin"],
+                ["legal", "cg-legal"],
+                ["not-imported", "cg-legal"],
+              ]),
+              starred: ["starred", "in-fin"],
+            }),
+          },
+        },
+      ).pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) =>
+              Effect.succeed(McpToolAccessTestkit.liveThreadShell(id, { runtimeMode: "auto" })),
+            getThreadTitles: () => Effect.succeed({}),
+            listActiveShellIndex: () =>
+              Effect.succeed(
+                [
+                  claudeThread("in-fin", { key: "a", section: "fin" }),
+                  claudeThread("in-mine", { key: "b", section: "mine" }),
+                  claudeThread("legal"),
+                  claudeThread("starred"),
+                  // Not a Claude import, so the sync leaves it alone.
+                  McpToolAccessTestkit.liveThreadShell(ThreadId.make("native")),
+                ].map((entry) => ({ mayBeLive: false, hasRemoteTasks: false, ...entry })),
+              ),
+            dispatch: (command) => {
+              dispatched.push(command);
+              return Effect.succeed({ sequence: dispatched.length, storedEvents: [] });
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});

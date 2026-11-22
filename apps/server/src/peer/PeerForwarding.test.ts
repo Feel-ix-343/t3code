@@ -34,6 +34,8 @@ import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
 import * as ProviderAdapterRegistry from "../orchestration-v2/ProviderAdapterRegistry.ts";
 import * as ProjectCloneTracker from "../project/ProjectCloneTracker.ts";
 import * as ProjectService from "../project/ProjectService.ts";
+import * as AgentSessionImporter from "../project/AgentSessionImporter.ts";
+import * as AgentSessionScanner from "../project/AgentSessionScanner.ts";
 import * as ProviderRegistry from "../provider/ProviderRegistry.ts";
 import * as ScheduledTaskService from "../scheduledTasks/ScheduledTaskService.ts";
 import * as SecretRequests from "../secrets/SecretRequests.ts";
@@ -246,7 +248,13 @@ const serveBox = (seen: Ref.Ref<Seen>, linkSession: Ref.Ref<string>) =>
       Layer.provide(DocumentText.layer.pipe(Layer.provideMerge(NodeServices.layer))),
       Layer.provide(NodeCrypto.layer),
       Layer.provide(boxThreads(seen, linkSession)),
-      Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+      Layer.provide(
+        Layer.mergeAll(
+          Layer.mock(ThreadSearch.ThreadSearch)({}),
+          Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
+          Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
+        ),
+      ),
       Layer.provide(boxLaunches(seen)),
       Layer.provide(
         Layer.mock(ManagedProjectFolders.ManagedProjectFolders)({ namedProjectsRoot: "/projects" }),
@@ -345,6 +353,8 @@ const makeLaptop = Effect.gen(function* () {
         Layer.mock(ProviderAdapterRegistry.ProviderAdapterRegistryV2)({}),
         Layer.mock(ScheduledTaskService.ScheduledTaskService)({}),
         Layer.mock(ProjectService.ProjectService)({}),
+        Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
+        Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
         Layer.mock(ProjectCloneTracker.ProjectCloneTracker)({}),
         Layer.mock(SecretRequests.SecretRequests)({}),
         ServerSettings.layerTest(),

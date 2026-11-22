@@ -45,7 +45,12 @@ import { expandHomePath } from "@t3tools/provider-core/server/pathExpansion";
 import { piHome, resolvePiSessionsDir } from "@t3tools/provider-pi/server/usage";
 import * as ServerSettings from "../serverSettings.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
-import { type ClaudeDesktopLineage, readClaudeDesktopLineage } from "./ClaudeDesktopSessions.ts";
+import {
+  type ClaudeDesktopLineage,
+  type ClaudeDesktopOrganization,
+  readClaudeDesktopLineage,
+  readClaudeDesktopOrganization,
+} from "./ClaudeDesktopSessions.ts";
 import {
   createTranscriptJsonReader,
   createTranscriptJsonSelector,
@@ -245,6 +250,8 @@ export class AgentSessionScanner extends Context.Service<
       workspaceRoot: string,
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
     ) => Stream.Stream<AgentSessionRecentThread, AgentSessionScanError>;
+    /** The Claude desktop app's sidebar sections and starred sessions (macOS; else empty). */
+    readonly claudeDesktopOrganization: Effect.Effect<ClaudeDesktopOrganization>;
   }
 >()("t3/project/AgentSessionScanner") {}
 
@@ -2344,7 +2351,12 @@ export const make = Effect.gen(function* () {
     completedSources = [],
   ) => Stream.unwrap(prepareRecentThreads(workspaceRoot, completedSources));
 
-  return AgentSessionScanner.of({ scan, recentThreads });
+  const claudeDesktopOrganization = readClaudeDesktopOrganization(homeDir, platform).pipe(
+    Effect.provideService(FileSystem.FileSystem, fileSystem),
+    Effect.provideService(Path.Path, path),
+  );
+
+  return AgentSessionScanner.of({ scan, recentThreads, claudeDesktopOrganization });
 });
 
 export const layer = Layer.effect(AgentSessionScanner, make).pipe(
