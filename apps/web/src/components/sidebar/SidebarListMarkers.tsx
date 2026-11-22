@@ -2,7 +2,7 @@ import { CollapsibleSectionHeader } from "../ui/collapsible-section-header";
 import { useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import type { ContextMenuSource } from "@t3tools/contracts";
-import { BookmarkIcon, EllipsisIcon } from "lucide-react";
+import { ChevronDownIcon, EllipsisIcon, PlusIcon } from "lucide-react";
 import { type ReactNode, useLayoutEffect } from "react";
 import { contextMenuSourceOf } from "../../contextMenuSource";
 import { Button } from "../ui/button";
@@ -173,31 +173,45 @@ export function SidebarCustomSectionHeader(props: {
   title: string;
   count: number;
   isDropTarget: boolean;
+  collapsed: boolean;
+  onToggle: () => void;
   menuLabel: string;
+  newSectionLabel: string;
+  onNewSection: () => void;
   onMenu: (position: { x: number; y: number }, source: ContextMenuSource) => void;
 }) {
   return (
     <SidebarSortableSlot
       id={props.id}
       data-testid="sidebar-custom-section"
-      className="group/custom-section relative mx-0.5 mt-2 h-8"
+      className="group/custom-section relative mt-6 h-8"
     >
       <div
-        className={cn(
-          "flex h-8 w-full items-center gap-2 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left",
-          props.isDropTarget ? "text-primary" : "text-sidebar-foreground/90",
-        )}
+        className="flex h-8 w-full items-center gap-1 px-(--sidebar-row-content-inset)"
         onContextMenu={(event) => {
           event.preventDefault();
           props.onMenu({ x: event.clientX, y: event.clientY }, contextMenuSourceOf(event));
         }}
       >
-        <BookmarkIcon aria-hidden className="size-3.5 shrink-0 text-sidebar-muted-foreground" />
-        <span className="min-w-0 flex-1 truncate text-xs font-medium">{props.title}</span>
-        <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-hover/custom-section:hidden pointer-coarse:hidden">
-          {props.count}
-        </span>
-        <span className="hidden group-hover/custom-section:flex pointer-coarse:flex">
+        <button
+          type="button"
+          aria-expanded={!props.collapsed}
+          onClick={props.onToggle}
+          className={cn(
+            "flex min-w-0 cursor-pointer items-center gap-1 rounded-sm text-left text-xs outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
+            props.isDropTarget ? "text-primary" : "text-sidebar-muted-foreground",
+          )}
+        >
+          <span className="min-w-0 truncate">{props.title}</span>
+          <ChevronDownIcon
+            aria-hidden
+            className={cn("size-3 shrink-0 transition-transform", props.collapsed && "-rotate-90")}
+          />
+          {props.collapsed && props.count > 0 ? (
+            <span className="ms-0.5 shrink-0 tabular-nums">{props.count}</span>
+          ) : null}
+        </button>
+        <span className="ms-auto flex items-center opacity-0 focus-within:opacity-100 group-hover/custom-section:opacity-100 pointer-coarse:opacity-100">
           <Button
             size="icon-xs"
             variant="ghost-muted"
@@ -208,6 +222,14 @@ export function SidebarCustomSectionHeader(props: {
             }}
           >
             <EllipsisIcon aria-hidden />
+          </Button>
+          <Button
+            size="icon-xs"
+            variant="ghost-muted"
+            aria-label={props.newSectionLabel}
+            onClick={props.onNewSection}
+          >
+            <PlusIcon aria-hidden />
           </Button>
         </span>
       </div>

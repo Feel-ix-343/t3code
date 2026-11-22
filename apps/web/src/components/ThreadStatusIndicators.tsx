@@ -403,6 +403,7 @@ export function ThreadPullRequestBadgeControl({
   status,
   onOpenList,
   onOpenPullRequest,
+  iconOnly = false,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   badge: ThreadPullRequestBadge | null;
@@ -412,6 +413,8 @@ export function ThreadPullRequestBadgeControl({
   status: PrStatusIndicator | null;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  /** Drops the number; the label still names the pull request. */
+  iconOnly?: boolean;
 }) {
   const m = useMessages();
   const presentation = resolveThreadPullRequestBadgePresentation({ badge, number, url, status }, m);
@@ -427,6 +430,7 @@ export function ThreadPullRequestBadgeControl({
       pullRequests={pullRequests}
       onOpenList={onOpenList}
       onOpenPullRequest={onOpenPullRequest}
+      iconOnly={iconOnly}
     />
   );
 }
@@ -441,6 +445,7 @@ function PullRequestBadge({
   pullRequests,
   onOpenList,
   onOpenPullRequest,
+  iconOnly,
 }: {
   render: ReactElement<{ render?: useRender.RenderProp }>;
   presentation: NonNullable<ReturnType<typeof resolveThreadPullRequestBadgePresentation>>;
@@ -451,6 +456,7 @@ function PullRequestBadge({
   pullRequests: ReadonlyArray<ThreadPullRequestLink>;
   onOpenList: () => void;
   onOpenPullRequest: (event: MouseEvent<HTMLElement>, url?: string) => void;
+  iconOnly: boolean;
 }) {
   const onClick = opensList
     ? (event: MouseEvent<HTMLElement>) => {
@@ -479,8 +485,11 @@ function PullRequestBadge({
         <span
           className={cn("contents font-normal text-xs tabular-nums", presentation.toneClassName)}
         >
-          <presentation.Icon aria-hidden className="size-3 shrink-0" />
-          <span className="text-secondary-label">{presentation.text}</span>
+          <presentation.Icon
+            aria-hidden
+            className={iconOnly ? "size-3.5 shrink-0" : "size-3 shrink-0"}
+          />
+          {iconOnly ? null : <span className="text-secondary-label">{presentation.text}</span>}
         </span>
       </TooltipTrigger>
       <TooltipPopup

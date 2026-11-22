@@ -20,6 +20,7 @@ function makeUiState(overrides: Partial<UiState> = {}): UiState {
     projectExpandedById: {},
     projectOrder: [],
     sidebarProjectScopeKeys: [],
+    collapsedSidebarSectionIds: [],
     threadLastVisitedAtById: {},
     threadChangedFilesExpandedById: {},
     defaultAdvertisedEndpointKey: null,
@@ -126,6 +127,7 @@ describe("parsePersistedState", () => {
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
       sidebarProjectScopeKeys: [],
+      collapsedSidebarSectionIds: [],
       pullRequestMergeMethod: "merge",
       threadChangedFilesExpandedById: {
         "environment:thread-1": {
@@ -220,6 +222,7 @@ describe("uiStateStore persistence", () => {
         },
       },
       defaultAdvertisedEndpointKey: "desktop-core:lan:http",
+      collapsedSidebarSectionIds: ["section-later"],
     });
 
     persistState(state);
@@ -246,6 +249,7 @@ describe("uiStateStore persistence", () => {
         },
       },
       pullRequestMergeMethod: "merge",
+      collapsedSidebarSectionIds: ["section-later"],
     });
     expect(parsePersistedState(persisted)).toEqual({
       ...state,

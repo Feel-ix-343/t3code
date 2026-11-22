@@ -2022,6 +2022,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     });
   };
   const hasProjectFolders = projectFolders !== null && projectFolders.length > 0;
+  const collapsedSidebarSectionIds = useUiStateStore((state) => state.collapsedSidebarSectionIds);
+  const setSidebarSectionCollapsed = useUiStateStore((state) => state.setSidebarSectionCollapsed);
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
@@ -2049,6 +2051,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       for (const section of sidebarSections) {
         items.push({ kind: "custom-section", sectionId: section.id, placeholder: false });
         const rows = sectionPinnedThreads.get(section.id) ?? EMPTY_THREADS;
+        if (collapsedSidebarSectionIds.includes(section.id)) {
+          items.push(...rowsOf(routeThreadOnly(rows, routeRowThreadKey), "pinned"));
+          continue;
+        }
         if (rows.length === 0)
           items.push({ kind: "custom-section", sectionId: section.id, placeholder: true });
         items.push(...rowsOf(rows, "pinned"));
@@ -3954,13 +3960,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         );
                         const isCard =
                           section === "active" || section === "pinned" || section === "working";
-                        const rowVariant = folderRow
-                          ? folderRowsMultiline
-                            ? "folder-multiline"
-                            : "folder"
-                          : isCard
-                            ? "card"
-                            : "slim";
+                        // The boring sidebar's pinned lists stay one line; details are in the hover card.
+                        const rowVariant =
+                          section === "pinned" && projectFolders !== null
+                            ? "folder"
+                            : folderRow
+                              ? folderRowsMultiline
+                                ? "folder-multiline"
+                                : "folder"
+                              : isCard
+                                ? "card"
+                                : "slim";
                         return (
                           <SortableThreadRow
                             key={threadKey}
@@ -4134,7 +4144,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                                 title={section.title}
                                 count={sectionPinnedThreads.get(section.id)?.length ?? 0}
                                 isDropTarget={isDropTarget}
+                                collapsed={collapsedSidebarSectionIds.includes(section.id)}
+                                onToggle={() =>
+                                  setSidebarSectionCollapsed(
+                                    section.id,
+                                    !collapsedSidebarSectionIds.includes(section.id),
+                                  )
+                                }
                                 menuLabel={gt("{section} options", { section: section.title })}
+                                newSectionLabel={gt("New section…")}
+                                onNewSection={() => void createSidebarSection()}
                                 onMenu={(position, source) =>
                                   handleSidebarSectionMenu(section.id, position, source)
                                 }

@@ -1,7 +1,7 @@
 import type { EnvironmentThreadShell } from "@t3tools/client-runtime/state/models";
 import { scopedThreadKey, scopeThreadRef } from "@t3tools/client-runtime/environment";
 import type { ContextMenuSource } from "@t3tools/contracts";
-import { ChevronDownIcon, SquarePenIcon } from "lucide-react";
+import { ChevronDownIcon, PlusIcon } from "lucide-react";
 import { msg, T, useGT, useMessages, Var } from "gt-react";
 import { memo } from "react";
 
@@ -10,7 +10,6 @@ import { contextMenuSourceOf } from "../../contextMenuSource";
 import type { SidebarProjectSnapshot } from "../../sidebarProjectGrouping";
 import { useUiStateStore } from "../../uiStateStore";
 import { resolveSidebarFolderDot, resolveThreadLastVisitedAt } from "../Sidebar.logic";
-import { ProjectFavicon } from "../ProjectFavicon";
 import { SidebarSortableSlot } from "./SidebarListMarkers";
 import { Button } from "../ui/button";
 import { Tooltip, TooltipPopup, TooltipTrigger } from "../ui/tooltip";
@@ -35,9 +34,9 @@ export function sidebarFolderRowId(projectKey: string) {
 }
 
 /**
- * A project folder in the boring sidebar. It reads like a shelf header: a trailing
- * count and chevron, with the count and a status dot only while it is closed, so a
- * closed folder still says when a hidden thread needs you.
+ * A project folder in the boring sidebar. It reads like a section header: a muted name
+ * and chevron, with a count and status dot only while it is closed, so a closed folder
+ * still says when a hidden thread needs you.
  */
 export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHeader(props: {
   /** Its slot in the sidebar's sortable list, so dragged rows sort around it. */
@@ -75,7 +74,7 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
     <SidebarSortableSlot
       id={props.sortableId}
       data-testid="sidebar-project-folder"
-      className="group/project-folder relative mt-2 first:mt-0"
+      className="group/project-folder relative mt-6 flex h-8 items-center gap-1 px-(--sidebar-row-content-inset)"
     >
       <button
         type="button"
@@ -90,32 +89,23 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
             contextMenuSourceOf(event),
           );
         }}
-        className="flex h-8 w-full cursor-pointer items-center gap-2.5 rounded-(--control-radius) px-(--sidebar-row-content-inset) text-left outline-none hover:bg-sidebar-row-hover focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+        className="flex min-w-0 cursor-pointer items-center gap-1 rounded-sm text-left text-xs text-sidebar-muted-foreground outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
       >
-        <ProjectFavicon project={group} className="size-4 shrink-0" />
-        <span className="min-w-0 flex-1 truncate text-sm font-medium text-sidebar-foreground/90">
-          {group.displayName}
-        </span>
+        <span className="min-w-0 truncate">{group.displayName}</span>
+        <ChevronDownIcon
+          aria-hidden
+          className={cn("size-3 shrink-0 transition-transform", collapsed && "-rotate-90")}
+        />
+        {collapsed && hiddenThreads.length > 0 ? (
+          <span className="ms-0.5 shrink-0 tabular-nums">{hiddenThreads.length}</span>
+        ) : null}
         {dot ? (
-          <span className={cn("size-1.5 shrink-0 rounded-full", FOLDER_DOT_CLASS_NAME[dot])}>
+          <span className={cn("ms-1 size-1.5 shrink-0 rounded-full", FOLDER_DOT_CLASS_NAME[dot])}>
             <span className="sr-only">{m(FOLDER_DOT_LABEL[dot])}</span>
           </span>
         ) : null}
-        {collapsed && hiddenThreads.length > 0 ? (
-          <span className="shrink-0 text-xs tabular-nums text-sidebar-muted-foreground group-hover/project-folder:invisible group-has-[[data-sidebar-action-for]:focus]/project-folder:invisible pointer-coarse:invisible">
-            {hiddenThreads.length}
-          </span>
-        ) : null}
-        <ChevronDownIcon
-          aria-hidden
-          className={cn(
-            "size-3 shrink-0 text-sidebar-muted-foreground transition-transform",
-            collapsed && "-rotate-90",
-          )}
-        />
       </button>
-      {/* Sits over the count, which hides on hover or focus, and left of the chevron. */}
-      <span className="absolute inset-y-0 right-6 flex items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
+      <span className="ms-auto flex items-center opacity-0 focus-within:opacity-100 group-hover/project-folder:opacity-100 pointer-coarse:opacity-100">
         <Tooltip>
           <TooltipTrigger
             render={
@@ -128,7 +118,7 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
               />
             }
           >
-            <SquarePenIcon aria-hidden />
+            <PlusIcon aria-hidden />
           </TooltipTrigger>
           <TooltipPopup>
             <T>

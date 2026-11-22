@@ -32,12 +32,14 @@ export interface PersistedUiState {
   threadChangedFilesExpansionVersion?: number;
   threadChangedFilesExpandedById?: Record<string, Record<string, boolean>>;
   pullRequestMergeMethod?: string;
+  collapsedSidebarSectionIds?: string[];
 }
 
 export interface UiProjectState {
   projectExpandedById: Record<string, boolean>;
   projectOrder: string[];
   sidebarProjectScopeKeys: string[];
+  collapsedSidebarSectionIds: string[];
 }
 
 export interface UiThreadState {
@@ -60,6 +62,7 @@ const initialState: UiState = {
   projectExpandedById: {},
   projectOrder: [],
   sidebarProjectScopeKeys: [],
+  collapsedSidebarSectionIds: [],
   threadLastVisitedAtById: {},
   threadChangedFilesExpandedById: {},
   defaultAdvertisedEndpointKey: null,
@@ -156,6 +159,7 @@ export function parsePersistedState(parsed: PersistedUiState): UiState {
     pullRequestMergeMethod: isPullRequestMergeMethod(parsed.pullRequestMergeMethod)
       ? parsed.pullRequestMergeMethod
       : initialState.pullRequestMergeMethod,
+    collapsedSidebarSectionIds: sanitizeStringArray(parsed.collapsedSidebarSectionIds),
   };
 }
 
@@ -230,6 +234,7 @@ export function persistState(state: UiState): void {
         threadChangedFilesExpansionVersion: THREAD_CHANGED_FILES_EXPANSION_VERSION,
         threadChangedFilesExpandedById: state.threadChangedFilesExpandedById,
         pullRequestMergeMethod: state.pullRequestMergeMethod,
+        collapsedSidebarSectionIds: state.collapsedSidebarSectionIds,
       } satisfies PersistedUiState),
     );
     if (!legacyKeysCleanedUp) {
@@ -378,6 +383,20 @@ export function setProjectExpanded(
   };
 }
 
+function setSidebarSectionCollapsed(
+  state: UiState,
+  sectionId: string,
+  collapsed: boolean,
+): UiState {
+  if (state.collapsedSidebarSectionIds.includes(sectionId) === collapsed) return state;
+  return {
+    ...state,
+    collapsedSidebarSectionIds: collapsed
+      ? [...state.collapsedSidebarSectionIds, sectionId]
+      : state.collapsedSidebarSectionIds.filter((id) => id !== sectionId),
+  };
+}
+
 export function reorderProjects(
   state: UiState,
   currentProjectOrder: readonly string[],
@@ -430,6 +449,7 @@ interface UiStateStore extends UiState {
   setSidebarProjectScopeKeys: (projectKeys: readonly string[]) => void;
   setPullRequestMergeMethod: (method: PullRequestMergeMethod) => void;
   setProjectExpanded: (projectIds: string | readonly string[], expanded: boolean) => void;
+  setSidebarSectionCollapsed: (sectionId: string, collapsed: boolean) => void;
   reorderProjects: (
     currentProjectOrder: readonly string[],
     draggedProjectIds: readonly string[],
@@ -452,6 +472,8 @@ export const useUiStateStore = create<UiStateStore>((set) => ({
   setPullRequestMergeMethod: (method) => set((state) => setPullRequestMergeMethod(state, method)),
   setProjectExpanded: (projectIds, expanded) =>
     set((state) => setProjectExpanded(state, projectIds, expanded)),
+  setSidebarSectionCollapsed: (sectionId, collapsed) =>
+    set((state) => setSidebarSectionCollapsed(state, sectionId, collapsed)),
   reorderProjects: (currentProjectOrder, draggedProjectIds, targetProjectIds) =>
     set((state) =>
       reorderProjects(state, currentProjectOrder, draggedProjectIds, targetProjectIds),

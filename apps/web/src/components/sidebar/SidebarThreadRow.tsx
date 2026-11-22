@@ -47,6 +47,7 @@ import {
   CircleDashedIcon,
   CircleDotDashedIcon,
   ClockIcon,
+  EllipsisIcon,
   GitBranchIcon,
   MessageCircleQuestionIcon,
   PinIcon,
@@ -937,6 +938,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         addFolders: () => {},
       })
     : null;
+  const handleMoreClick = (event: ReactMouseEvent<HTMLElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const rect = event.currentTarget.getBoundingClientRect();
+    onContextMenu(threadRef, { x: rect.left, y: rect.bottom }, contextMenuSourceOf(event));
+  };
   const handleSettleClick = (event: ReactMouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1080,7 +1087,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
       ref={isRegeneratingTitle ? observeVisibleAnimation : undefined}
       className={cn(
         "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
-        shouldRecede ? "font-normal" : "font-medium",
+        shouldRecede || variant === "folder" || variant === "folder-multiline"
+          ? "font-normal"
+          : "font-medium",
         isRegeneratingTitle
           ? "relative truncate text-muted-foreground"
           : variant !== "slim"
@@ -1130,6 +1139,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         status={prStatus}
         onOpenList={openLinkedItems}
         onOpenPullRequest={handlePrClick}
+        iconOnly={variant === "folder"}
       />
     ) : null;
   const firstIssue = thread.issues?.[0];
@@ -1333,6 +1343,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         {...(fileDropHandlers ?? {})}
         className={cn(
           "list-none [content-visibility:auto] [contain-intrinsic-size:auto_--spacing(9)]",
+          variant === "folder" && "[contain-intrinsic-size:auto_--spacing(10)]",
           metaLine !== null && multiline && "[contain-intrinsic-size:auto_--spacing(13.5)]",
           sortable?.isDragging && "relative z-20",
         )}
@@ -1355,8 +1366,13 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   multiline
                     ? "flex flex-col justify-center px-2.5 py-1.5"
                     : "flex h-9 items-center gap-2.5 px-2.5",
-                  // Lines titles up with the folder name, past its chevron and icon.
-                  inFolder && "ps-9",
+                  // Folder rows line titles up with the section and folder header text.
+                  inFolder && "rounded-lg px-(--sidebar-row-content-inset) light:ring-0",
+                  inFolder && !multiline && "h-10",
+                  inFolder &&
+                    (props.isActive || isSelected
+                      ? "light:bg-sidebar-control-surface"
+                      : "light:hover:bg-sidebar-control-surface/70"),
                 )}
                 onClick={handleClick}
                 onDoubleClick={handleDoubleClick}
@@ -1383,9 +1399,11 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {draftIndicator}
               {title}
               {multiline ? titleLineIcons : null}
-              {pinIndicator}
+              {/* Folder-style pinned rows sit under a pinned header; unpin lives in the … menu. */}
+              {inFolder ? null : pinIndicator}
               {multiline ? null : terminalStatusIcon}
               {multiline ? null : issueBadge}
+              {inFolder && !multiline ? prBadge : null}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   <T>Regenerating title</T>
@@ -1397,6 +1415,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 <span
                   className={cn(
                     "relative ml-auto flex h-6 min-w-8 shrink-0 items-center justify-end",
+                    inFolder && "min-w-0 group-any-hover/sidebar-row:min-w-13",
                     props.sweepAction !== null && "hidden",
                     jumpHintLabel && JUMP_HINT_SLOT_CLASS_NAME,
                   )}
@@ -1434,17 +1453,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                           <T>Dismiss Woke notification</T>
                         </TooltipPopup>
                       </Tooltip>
-                    ) : inFolder && topStatus ? (
-                      // Folder rows have no status line, so the status takes the time slot.
-                      <span
-                        className={cn(
-                          "inline-flex items-center gap-1 text-xs font-medium",
-                          topStatus.className,
-                        )}
-                      >
-                        <TopStatusIcon icon={topStatus.icon} className="size-3" />
-                        {topStatus.label}
-                      </span>
+                    ) : inFolder ? (
+                      // Folder rows keep to the title: a status shows as its icon alone.
+                      topStatus ? (
+                        <span className={cn("inline-flex items-center", topStatus.className)}>
+                          <TopStatusIcon icon={topStatus.icon} className="size-3.5" />
+                          <span className="sr-only">{topStatus.label}</span>
+                        </span>
+                      ) : null
                     ) : (
                       <span className="text-xs">
                         <RelativeTimeLabel
@@ -1467,6 +1483,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                         className={cn(
                           "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
                           isWoke && "group-any-hover/sidebar-row:static",
+                          inFolder && "right-6 mr-0",
                         )}
                       >
                         <AlarmClockOffIcon className="mb-px size-3" />
@@ -1484,6 +1501,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             className={cn(
                               "pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-1.5 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
                               isWoke && "group-any-hover/sidebar-row:static",
+                              inFolder && "right-6 mr-0",
                             )}
                           />
                         }
@@ -1506,6 +1524,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                             className={cn(
                               "pointer-events-none absolute inset-y-0 right-0 -mr-2 inline-flex cursor-pointer items-center gap-1 rounded-md bg-transparent px-2 text-xs text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100",
                               isWoke && "group-any-hover/sidebar-row:static",
+                              inFolder && "right-6 mr-0",
                             )}
                           />
                         }
@@ -1517,6 +1536,17 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                       </TooltipPopup>
                     </Tooltip>
                   )}
+                  {inFolder ? (
+                    <button
+                      type="button"
+                      aria-label={gt("More actions")}
+                      onClick={handleMoreClick}
+                      onPointerDown={(event) => event.stopPropagation()}
+                      className="pointer-events-none absolute inset-y-0 right-0 -mr-1 inline-flex cursor-pointer items-center rounded-md px-1 text-muted-foreground opacity-0 transition-opacity hover:text-foreground focus-visible:pointer-events-auto focus-visible:opacity-100 group-any-hover/sidebar-row:pointer-events-auto group-any-hover/sidebar-row:opacity-100"
+                    >
+                      <EllipsisIcon aria-hidden className="size-4" />
+                    </button>
+                  ) : null}
                   {jumpHintLabel ? <JumpHintBadge label={jumpHintLabel} /> : null}
                 </span>
               )}
