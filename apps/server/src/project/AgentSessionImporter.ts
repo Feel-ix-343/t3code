@@ -222,8 +222,8 @@ function nextHistorySlot(threadId: ThreadId, messageIds: ReadonlyArray<string>):
 
 /** Why an import left a session alone. */
 export type AgentSessionImportSkipReason =
-  /** The scan could not read it, or the import budget ran out first. */
-  | "unreadable"
+  /** Unreadable, outside the project's folders, or past the scan's per-call budget. */
+  | "not-importable"
   | "unresumable"
   | "other-project"
   /** Its thread has T3 runs or messages of its own. */
@@ -569,7 +569,7 @@ const make = Effect.gen(function* () {
     yield* Stream.runForEach(outcomes, (outcome) =>
       Effect.gen(function* () {
         if (outcome._tag === "Skipped") {
-          skip("unreadable");
+          skip("not-importable");
           return;
         }
         const source = outcome.source;
