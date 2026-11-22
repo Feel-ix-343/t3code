@@ -912,6 +912,19 @@ it.effect("an MCP move places a pin inside a sidebar section, between its neighb
       }),
     ]);
 
+    const toEnd = yield* call("t3_thread_organize", {
+      action: "move",
+      threadId: "plain-pin",
+      sectionId: "work",
+    });
+    expect(toEnd.isError).toBe(false);
+    expect(dispatched[1]).toMatchObject({
+      type: "thread.pin.reorder",
+      threadId: "plain-pin",
+      orderKey: pinOrderKeyBetween("t", null),
+      sectionId: "work",
+    });
+
     const unknown = yield* call("t3_thread_organize", {
       action: "pin",
       threadId: "plain-pin",
@@ -926,10 +939,30 @@ it.effect("an MCP move places a pin inside a sidebar section, between its neighb
       sections: [{ id: "work", title: "Work" }, { title: "Later" }],
     });
 
+    const laterId = (created.structuredContent as { readonly sectionId: string }).sectionId;
+    const renamed = yield* call("t3_sidebar_section", {
+      action: "rename",
+      sectionId: "work",
+      title: "Deep work",
+    });
+    expect(renamed.structuredContent).toMatchObject({
+      sections: [{ id: "work", title: "Deep work" }, { id: laterId }],
+    });
+    const raised = yield* call("t3_sidebar_section", {
+      action: "reorder",
+      sectionId: laterId,
+      beforeSectionId: "work",
+    });
+    expect(raised.structuredContent).toMatchObject({ sections: [{ id: laterId }, { id: "work" }] });
+    const lowered = yield* call("t3_sidebar_section", { action: "reorder", sectionId: laterId });
+    expect(lowered.structuredContent).toMatchObject({
+      sections: [{ id: "work" }, { id: laterId }],
+    });
+
     const deleted = yield* call("t3_sidebar_section", { action: "delete", sectionId: "work" });
     expect(deleted.isError).toBe(false);
     // Its pins leave the section before it goes, keeping their place.
-    expect(dispatched.slice(1)).toEqual([
+    expect(dispatched.slice(2)).toEqual([
       expect.objectContaining({ threadId: "work-second", orderKey: "t", sectionId: null }),
       expect.objectContaining({ threadId: "work-first", orderKey: "f", sectionId: null }),
     ]);

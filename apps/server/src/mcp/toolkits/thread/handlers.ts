@@ -447,7 +447,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
             input.action === "pin"
               ? (pinnedListOrder(index, sectionId, sections).find((entry) => entry.id !== thread.id)
                   ?.id ?? null)
-              : yield* required(input.beforeThreadId, "beforeThreadId");
+              : (input.beforeThreadId ?? null);
           writes = planPinnedMove({ thread, sectionId, beforeThreadId, index, sections });
         } else {
           if (thread.settledOverride === "settled") {
@@ -456,7 +456,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
               message: "Only a pinned or active thread can be moved; un-settle it first.",
             });
           }
-          const beforeThreadId = yield* required(input.beforeThreadId, "beforeThreadId");
+          const beforeThreadId = input.beforeThreadId ?? null;
           const snapshot = yield* threads
             .getShellSnapshot({ projectId: thread.projectId, unsettledOnly: true })
             .pipe(Effect.mapError(unavailable));
@@ -565,7 +565,7 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           }
           case "reorder": {
             sectionId = yield* existing(yield* required(input.sectionId, "sectionId"));
-            const beforeSectionId = yield* required(input.beforeSectionId, "beforeSectionId");
+            const beforeSectionId = input.beforeSectionId ?? null;
             if (beforeSectionId !== null) yield* existing(beforeSectionId);
             const moving = current.find((section) => section.id === sectionId)!;
             const rest = current.filter((section) => section.id !== sectionId);
