@@ -251,6 +251,8 @@ export class AgentSessionScanner extends Context.Service<
       completedSources?: ReadonlyArray<AgentSessionImportSource>,
       onlySources?: ReadonlyArray<AgentSessionSource>,
     ) => Stream.Stream<AgentSessionRecentThread, AgentSessionScanError>;
+    /** Forget the cached transcript list so the next import sees sessions started since. */
+    readonly invalidateCandidates: Effect.Effect<void>;
     /** The Claude desktop app's sidebar sections and starred sessions (macOS; else empty). */
     readonly claudeDesktopOrganization: Effect.Effect<ClaudeDesktopOrganization>;
   }
@@ -2380,7 +2382,16 @@ export const make = Effect.gen(function* () {
     Effect.provideService(Path.Path, path),
   );
 
-  return AgentSessionScanner.of({ scan, recentThreads, claudeDesktopOrganization });
+  const invalidateCandidates = Effect.sync(() => {
+    cachedCandidates = null;
+  });
+
+  return AgentSessionScanner.of({
+    scan,
+    recentThreads,
+    invalidateCandidates,
+    claudeDesktopOrganization,
+  });
 });
 
 export const layer = Layer.effect(AgentSessionScanner, make).pipe(

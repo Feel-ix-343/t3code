@@ -172,6 +172,8 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
           ),
         ];
 
+  // Sessions started since the last scan are only seen after a fresh collection.
+  yield* scanner.invalidateCandidates;
   const projectReports = yield* Effect.forEach(projects, (project) =>
     importer
       .importAgentThreads({ projectId: project.id }, { dryRun, onlySources: [CLAUDE_PROVIDER] })

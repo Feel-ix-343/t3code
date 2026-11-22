@@ -2022,6 +2022,7 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
             },
           },
           scanner: {
+            invalidateCandidates: Effect.void,
             claudeDesktopOrganization: Effect.succeed({
               sections: [
                 { id: "cg-fin", name: "FinSearch" },
