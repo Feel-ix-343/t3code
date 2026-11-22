@@ -74,7 +74,7 @@ export const SidebarProjectFolderHeader = memo(function SidebarProjectFolderHead
     <SidebarSortableSlot
       id={props.sortableId}
       data-testid="sidebar-project-folder"
-      className="group/project-folder relative mt-6 flex h-8 items-center gap-1 px-(--sidebar-row-content-inset)"
+      className="group/project-folder relative mt-3 flex h-6 items-center gap-1 px-(--sidebar-row-content-inset)"
     >
       <button
         type="button"

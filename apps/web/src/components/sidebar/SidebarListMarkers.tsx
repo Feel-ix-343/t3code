@@ -152,7 +152,7 @@ export function SidebarSectionHeader(props: {
     <SortableSidebarMarker
       marker={props.marker}
       data-testid={`sidebar-${props.marker}`}
-      className={cn("relative mx-0.5 h-8", props.className)}
+      className={cn("relative mx-0.5 h-6", props.className)}
     >
       <CollapsibleSectionHeader
         data-sidebar-row={`shelf:${shelf}`}
@@ -184,10 +184,10 @@ export function SidebarCustomSectionHeader(props: {
     <SidebarSortableSlot
       id={props.id}
       data-testid="sidebar-custom-section"
-      className="group/custom-section relative mt-6 h-8"
+      className="group/custom-section relative mt-3 h-6"
     >
       <div
-        className="flex h-8 w-full items-center gap-1 px-(--sidebar-row-content-inset)"
+        className="flex h-6 w-full items-center gap-1 px-(--sidebar-row-content-inset)"
         onContextMenu={(event) => {
           event.preventDefault();
           props.onMenu({ x: event.clientX, y: event.clientY }, contextMenuSourceOf(event));

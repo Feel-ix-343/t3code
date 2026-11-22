@@ -1365,10 +1365,10 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                   rowSurfaceClassName,
                   multiline
                     ? "flex flex-col justify-center px-2.5 py-1.5"
-                    : "flex h-9 items-center gap-2.5 px-2.5",
+                    : "flex h-6.5 items-center gap-2.5 px-2.5",
                   // Folder rows line titles up with the section and folder header text.
                   inFolder && "rounded-lg px-(--sidebar-row-content-inset) light:ring-0",
-                  inFolder && !multiline && "h-10",
+                  inFolder && !multiline && "h-7",
                   inFolder &&
                     (props.isActive || isSelected
                       ? "light:bg-sidebar-control-surface"
