@@ -1,5 +1,9 @@
 import { PullRequestProviderError } from "@t3tools/source-control-core/server/PullRequestProvider";
-import { PullRequestUnavailableError, SourceControlProviderKind } from "@t3tools/contracts";
+import {
+  PullRequestUnavailableError,
+  SourceControlProviderKind,
+  threadNestParentId,
+} from "@t3tools/contracts";
 import { limitRecoveryCommand } from "./UsageLimitRecoveryWorker.ts";
 import { createOrchestrationV2TurnItemVisibility } from "@t3tools/shared/orchestrationV2Timeline";
 import * as McpProviderSessions from "@t3tools/provider-core/server/McpProviderSessions";
@@ -3556,6 +3560,86 @@ const writeHtmlRenderRun = Effect.fn("test.writeHtmlRenderRun")(function* (input
 });
 
 it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
+  it.effect("nests a thread under another in its project and detaches it, refusing loops", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const projectId = ProjectId.make("runtime-layer-nest-project");
+      const otherProjectId = ProjectId.make("runtime-layer-nest-other-project");
+      for (const [id, root] of [
+        [projectId, "/workspace/nest"],
+        [otherProjectId, "/workspace/nest-other"],
+      ] as const) {
+        yield* seedProject({
+          projectId: id,
+          title: id,
+          workspaceRoot: root,
+          defaultModelSelection: null,
+          createdAt: "2026-09-07T00:00:00.000Z",
+        });
+      }
+      const create = (name: string, project: ProjectId) =>
+        orchestrator.dispatch({
+          type: "thread.create",
+          createdBy: "user",
+          creationSource: "web",
+          commandId: CommandId.make(`runtime-layer-nest-create-${name}`),
+          threadId: ThreadId.make(`runtime-layer-nest-${name}`),
+          projectId: project,
+          title: name,
+          modelSelection,
+          runtimeMode: "full-access",
+          interactionMode: "default",
+          branch: null,
+          worktreePath: null,
+        });
+      yield* create("parent", projectId);
+      yield* create("child", projectId);
+      yield* create("elsewhere", otherProjectId);
+      const id = (name: string) => ThreadId.make(`runtime-layer-nest-${name}`);
+      const nest = (step: string, threadId: ThreadId, parentThreadId: ThreadId | null) =>
+        orchestrator.dispatch({
+          type: "thread.nest.set",
+          commandId: CommandId.make(`runtime-layer-nest-${step}`),
+          threadId,
+          parentThreadId,
+        });
+      const lineageOf = (name: string) =>
+        orchestrator
+          .getShellSnapshot()
+          .pipe(
+            Effect.map(
+              (snapshot) => snapshot.threads.find((thread) => thread.id === id(name))!.lineage,
+            ),
+          );
+      const before = (yield* orchestrator.getThreadProjection(id("child"))).thread.updatedAt;
+
+      yield* nest("under", id("child"), id("parent"));
+      assert.equal((yield* lineageOf("child")).nestParentThreadId, id("parent"));
+      assert.equal(threadNestParentId(yield* lineageOf("child")), id("parent"));
+      // Placement is not activity, so the thread keeps its place in thread lists.
+      assert.equal(
+        DateTime.toEpochMillis(
+          (yield* orchestrator.getThreadProjection(id("child"))).thread.updatedAt,
+        ),
+        DateTime.toEpochMillis(before),
+      );
+
+      for (const [step, threadId, parentThreadId] of [
+        ["self", id("child"), id("child")],
+        ["loop", id("parent"), id("child")],
+        ["other-project", id("child"), id("elsewhere")],
+        ["missing", id("child"), ThreadId.make("runtime-layer-nest-missing")],
+      ] as const) {
+        const refused = yield* nest(step, threadId, parentThreadId).pipe(Effect.flip);
+        assert.instanceOf(refused, Orchestrator.OrchestratorDispatchError, step);
+      }
+
+      yield* nest("detach", id("child"), null);
+      assert.isNull((yield* lineageOf("child")).nestParentThreadId);
+      assert.isNull(threadNestParentId(yield* lineageOf("child")));
+    }),
+  );
+
   it.effect("applies lifecycle commands idempotently and emits archive/removal shell deltas", () =>
     Effect.gen(function* () {
       const orchestrator = yield* Orchestrator.OrchestratorV2;

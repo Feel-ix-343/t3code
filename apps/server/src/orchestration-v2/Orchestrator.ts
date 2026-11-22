@@ -13,7 +13,7 @@ import {
   runRanAfter,
   usageLimitBlockedRun,
 } from "@t3tools/shared/orchestrationV2ThreadError";
-import { threadIssueKeysEqual } from "@t3tools/contracts";
+import { threadIssueKeysEqual, threadNestParentId } from "@t3tools/contracts";
 import { canonicalizeGitCafePullRequestUrl } from "@t3tools/source-control-definitions/registry";
 import { threadPullRequestsOf } from "../sourceControl/threadPullRequests.ts";
 import {
@@ -658,6 +658,7 @@ function commandThreadId(command: OrchestrationV2ServerCommand): ThreadId {
     case "thread.unpin":
     case "thread.pin.reorder":
     case "thread.active.reorder":
+    case "thread.nest.set":
     case "thread.tag.set":
     case "thread.visit":
     case "thread.mark-unread":
@@ -4385,6 +4386,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           | "thread.pin.reorder"
           | "thread.tag.set"
           | "thread.active.reorder"
+          | "thread.nest.set"
           | "thread.mark-unread"
           | "thread.metadata.update"
           | "thread.pull-request.link"
@@ -4555,6 +4557,38 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
         commandType: command.type,
         cause: `Thread ${command.threadId} is archived.`,
       });
+    }
+    if (command.type === "thread.nest.set" && command.parentThreadId !== null) {
+      const nestError = (cause: string) =>
+        new OrchestratorDispatchError({
+          commandId: command.commandId,
+          commandType: command.type,
+          cause,
+        });
+      if (command.parentThreadId === command.threadId) {
+        return yield* nestError("A thread cannot be nested under itself.");
+      }
+      // Walk up from the new parent: reaching this thread would close a loop.
+      let ancestorId: ThreadId | null = command.parentThreadId;
+      for (let depth = 0; ancestorId !== null; depth += 1) {
+        const ancestor = yield* projectionStore
+          .getThread(ancestorId)
+          .pipe(Effect.option, mapDispatchError(command));
+        if (Option.isNone(ancestor) || ancestor.value.deletedAt !== null) {
+          if (depth === 0) {
+            return yield* nestError(`Thread ${command.parentThreadId} does not exist.`);
+          }
+          break;
+        }
+        if (depth === 0 && ancestor.value.projectId !== thread.projectId) {
+          return yield* nestError("A thread can only be nested under a thread in its project.");
+        }
+        if (ancestor.value.id === command.threadId) {
+          return yield* nestError(`Thread ${command.parentThreadId} is nested under this thread.`);
+        }
+        if (depth >= 64) break;
+        ancestorId = threadNestParentId(ancestor.value.lineage);
+      }
     }
     // Reject reorder after unpin so a raced request cannot restore a cleared pin.
     if (command.type === "thread.pin.reorder" && thread.pinnedAt == null) {
@@ -5070,6 +5104,11 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             updatedAt: thread.updatedAt,
           };
         }
+        case "thread.nest.set":
+          return {
+            ...thread,
+            lineage: { ...thread.lineage, nestParentThreadId: command.parentThreadId },
+          };
         case "thread.tag.set": {
           const current = thread.tags ?? [];
           return {
@@ -5553,6 +5592,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
           return "thread.marked-unread" as const;
         case "thread.metadata.update":
         case "thread.title.regeneration.complete":
+        case "thread.nest.set":
           return "thread.metadata-updated" as const;
         case "thread.pull-request.link":
         case "thread.pull-request.unlink":
@@ -15820,6 +15860,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
       case "thread.unpin":
       case "thread.pin.reorder":
       case "thread.active.reorder":
+      case "thread.nest.set":
       case "thread.tag.set":
       case "thread.mark-unread":
       case "thread.pull-request.link":

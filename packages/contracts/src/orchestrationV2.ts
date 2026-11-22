@@ -174,8 +174,26 @@ export const OrchestrationV2AppThreadLineage = Schema.Struct({
   sideChat: Schema.optional(Schema.Boolean),
   /** The thread whose agent launched this one as a separate top-level thread. */
   spawnedBy: Schema.optional(ThreadId),
+  /**
+   * Where a person or agent placed the thread in thread lists, overriding the nesting its
+   * lineage implies: a thread to nest under, or null for none. Absent, the lineage decides.
+   */
+  nestParentThreadId: Schema.optional(Schema.NullOr(ThreadId)),
 });
 export type OrchestrationV2AppThreadLineage = typeof OrchestrationV2AppThreadLineage.Type;
+
+/**
+ * The thread lists nest a thread under: the one placed there, else the thread that launched it,
+ * else the one it was forked from (side chats stay inside their parent instead).
+ */
+export function threadNestParentId(lineage: OrchestrationV2AppThreadLineage): ThreadId | null {
+  if (lineage.nestParentThreadId !== undefined) return lineage.nestParentThreadId;
+  if (lineage.spawnedBy !== undefined) return lineage.spawnedBy;
+  if (lineage.relationshipToParent === "fork" && lineage.sideChat !== true) {
+    return lineage.parentThreadId;
+  }
+  return null;
+}
 
 /** Subagents and side chats live inside their parent's view, never in thread lists. */
 export const isListedThreadLineage = (lineage: OrchestrationV2AppThreadLineage): boolean =>
@@ -3399,6 +3417,13 @@ export const OrchestrationV2Command = Schema.Union([
     commandId: CommandId,
     threadId: ThreadId,
     orderKey: TrimmedNonEmptyString,
+  }),
+  /** Nests the thread under `parentThreadId` in thread lists, or with null keeps it unnested. */
+  Schema.Struct({
+    type: Schema.Literal("thread.nest.set"),
+    commandId: CommandId,
+    threadId: ThreadId,
+    parentThreadId: Schema.NullOr(ThreadId),
   }),
   Schema.Struct({
     type: Schema.Literal("thread.visit"),
