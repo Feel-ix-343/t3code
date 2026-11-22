@@ -2242,13 +2242,17 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       ),
     );
   };
-  const createSidebarSection = async (): Promise<string | null> => {
+  /** Creates the section in `preferredEnvironmentId` when given, else this client's environment. */
+  const createSidebarSection = async (
+    preferredEnvironmentId?: EnvironmentId,
+  ): Promise<string | null> => {
     const title = await requestSidebarSectionName();
     if (title === null) return null;
     const environmentId =
-      primaryEnvironmentId !== null && serverConfigs.has(primaryEnvironmentId)
+      preferredEnvironmentId ??
+      (primaryEnvironmentId !== null && serverConfigs.has(primaryEnvironmentId)
         ? primaryEnvironmentId
-        : [...serverConfigs.keys()][0];
+        : [...serverConfigs.keys()][0]);
     if (environmentId === undefined) return null;
     const id = `section-${randomUUID()}`;
     const written = await writeSidebarSections(environmentId, [
@@ -2260,9 +2264,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const moveThreadToSidebarSection = async (
     thread: EnvironmentThreadShell,
     sectionId: string | null,
+    // Settings reach this render later, so a section just created here is not in them yet.
+    { justCreated = false }: { justCreated?: boolean } = {},
   ) => {
     const threadRef = scopeThreadRef(thread.environmentId, thread.id);
-    if (sectionId !== null && !(await ensureSidebarSection(thread, sectionId))) return;
+    if (sectionId !== null && !justCreated && !(await ensureSidebarSection(thread, sectionId)))
+      return;
     const list =
       sectionId === null
         ? plainPinnedThreads
@@ -3194,9 +3201,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         if (clicked.value.startsWith("section:")) {
           const choice = clicked.value.slice("section:".length);
           const sectionId =
-            choice === "none" ? null : choice === "new" ? await createSidebarSection() : choice;
+            choice === "none"
+              ? null
+              : choice === "new"
+                ? await createSidebarSection(thread.environmentId)
+                : choice;
           if (choice === "new" && sectionId === null) return;
-          await moveThreadToSidebarSection(thread, sectionId);
+          await moveThreadToSidebarSection(thread, sectionId, { justCreated: choice === "new" });
           return;
         }
         if (clicked.value?.startsWith("snooze:")) {
