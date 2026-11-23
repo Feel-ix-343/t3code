@@ -39,6 +39,7 @@ import {
   sidebarListKey,
 } from "./sidebarArrangement.ts";
 import { syncClaudeSessions } from "./claudeSessionSync.ts";
+import { setRemoteThreadNestParent } from "./remoteNesting.ts";
 import { ThreadToolkit } from "./tools.ts";
 
 function queueEntry(
@@ -416,6 +417,22 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
   ),
   t3_thread_organize: writesThread((input) =>
     Effect.gen(function* () {
+      if (input.remoteThread !== undefined) {
+        if ((input.action !== "nest" && input.action !== "unnest") || input.threadId !== undefined)
+          return yield* new OrchestratorMcpFailure({
+            code: "invalid_request",
+            message: "`remoteThread` goes with `nest` or `unnest` and no `threadId`.",
+          });
+        const parentThreadId =
+          input.action === "nest"
+            ? (yield* readThread(yield* required(input.parentThreadId, "parentThreadId")))
+                .projection.thread.id
+            : null;
+        yield* setRemoteThreadNestParent(input.remoteThread, parentThreadId).pipe(
+          Effect.mapError(unavailable),
+        );
+        return { remoteThreadNestParent: parentThreadId };
+      }
       const { threads, projection, caller } = yield* readThread(input.threadId);
       const common = { commandId: yield* newCommandId(), threadId: projection.thread.id };
       const setNestParent = Effect.fn("mcp.setNestParent")(function* (

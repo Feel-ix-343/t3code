@@ -399,7 +399,11 @@ const makeLaptop = Effect.gen(function* () {
         ),
         Effect.provideService(McpSchema.McpServerClient, mcpClient),
       );
-  return { links: Context.get(linking, PeerLinks.PeerLinks), call };
+  return {
+    links: Context.get(linking, PeerLinks.PeerLinks),
+    settings: Context.get(linking, ServerSettings.ServerSettingsService),
+    call,
+  };
 });
 
 const failureOf = (result: McpSchema.CallToolResult) => {
@@ -555,7 +559,21 @@ it.effect("launches in a linked environment with the caller's modes, retry-safe"
         projectId: boxProject,
         modelSelection: codex,
       });
+      // The box may not record who launched it, so this side nests it under the launcher.
+      const record = {
+        environmentId: box.environmentId,
+        threadId: (first.structuredContent as { threadId: string }).threadId,
+        parentThreadId: "thread:laptop-plan",
+      };
+      expect((yield* a.settings.getSettings).remoteThreadNestParents).toEqual([record]);
+      // A retry keeps a placement the user changed since.
+      yield* a.settings.updateSettings({
+        remoteThreadNestParents: [{ ...record, parentThreadId: null }],
+      });
       const retried = yield* launch("thread:laptop-plan");
+      expect((yield* a.settings.getSettings).remoteThreadNestParents).toEqual([
+        { ...record, parentThreadId: null },
+      ]);
       const [launched, relaunched] = (yield* Ref.get(seen)).launches;
       // The thread there runs with the caller's own modes here, below the
       // link's full access, and a retry asks for the same thread.

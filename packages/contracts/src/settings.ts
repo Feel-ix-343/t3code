@@ -112,6 +112,19 @@ export type SidebarSection = typeof SidebarSection.Type;
 export const SidebarSections = Schema.Array(SidebarSection).check(
   Schema.isMaxLength(MAX_SIDEBAR_SECTIONS),
 );
+/**
+ * A thread in a linked environment that a thread here launched, which this machine's sidebar
+ * nests under that thread: `parentThreadId`, or null once the user unnested it.
+ */
+export const RemoteThreadNestParent = Schema.Struct({
+  environmentId: TrimmedNonEmptyString,
+  threadId: TrimmedNonEmptyString,
+  parentThreadId: Schema.NullOr(TrimmedNonEmptyString),
+});
+export type RemoteThreadNestParent = typeof RemoteThreadNestParent.Type;
+export const RemoteThreadNestParents = Schema.Array(RemoteThreadNestParent).check(
+  Schema.isMaxLength(2000),
+);
 const DEFAULT_SIDEBAR_AUTO_SETTLE_AFTER_DAYS: SidebarAutoSettleAfterDays = 7;
 
 export const MAX_SNOOZE_PRESET_MINUTES = 30 * 24 * 60;
@@ -1505,6 +1518,10 @@ export const ServerSettings = Schema.Struct({
   hideTaggedThreads: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /** User-named sidebar sections, in display order. Pinned threads join one through `pinSectionId`. */
   sidebarSections: SidebarSections.pipe(Schema.withDecodingDefault(Effect.succeed([]))),
+  /** Threads launched from here into linked environments, nested under their launcher here. */
+  remoteThreadNestParents: RemoteThreadNestParents.pipe(
+    Schema.withDecodingDefault(Effect.succeed([])),
+  ),
   /** Beta: guest links for this machine's threads. Off refuses new links and pauses existing ones. */
   guestSharingEnabled: Schema.Boolean.pipe(Schema.withDecodingDefault(Effect.succeed(false))),
   /**
@@ -1947,6 +1964,7 @@ export const ServerSettingsPatch = Schema.Struct({
   hiddenThreadTags: Schema.optionalKey(Schema.Array(Schema.String)),
   hideTaggedThreads: Schema.optionalKey(Schema.Boolean),
   sidebarSections: Schema.optionalKey(SidebarSections),
+  remoteThreadNestParents: Schema.optionalKey(RemoteThreadNestParents),
   guestSharingEnabled: Schema.optionalKey(Schema.Boolean),
   linkedEnvironmentsEnabled: Schema.optionalKey(Schema.Boolean),
   promptSuggestionsEnabled: Schema.optionalKey(Schema.Boolean),

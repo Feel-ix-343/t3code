@@ -1,4 +1,5 @@
 import {
+  EnvironmentId,
   OrchestratorMcpEnvironmentTarget,
   ScheduledTaskId,
   ScheduledTask,
@@ -37,7 +38,7 @@ import * as ProjectService from "../../../project/ProjectService.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
-    "Pin, snooze, settle, archive, move, nest, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. `pin` with `sectionId` pins into that sidebar section (see `t3_sidebar_section`); null is plain Pinned. `move` reorders a pinned thread in its list or an active one in its project folder: before `beforeThreadId`, or omit it for the end; with `sectionId` it moves (and pins) into that list. `nest` shows it under `parentThreadId` (same project); `unnest` stops nesting it under the thread that spawned it, and with `sectionId`/`beforeThreadId` also moves it. A thread moved out of its parent's list is unnested. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
+    "Pin, snooze, settle, archive, move, nest, or mark a thread unread. Omit `threadId` for this thread. `snooze` needs `snoozedUntil`. `pin` with `sectionId` pins into that sidebar section (see `t3_sidebar_section`); null is plain Pinned. `move` reorders a pinned thread in its list or an active one in its project folder: before `beforeThreadId`, or omit it for the end; with `sectionId` it moves (and pins) into that list. `nest` shows it under `parentThreadId` (same project); `unnest` stops nesting it under the thread that spawned it, and with `sectionId`/`beforeThreadId` also moves it. `nest`/`unnest` with `remoteThread` (a linked environment's thread) instead nest it under `parentThreadId` here or not. A thread moved out of its parent's list is unnested. Settling this thread applies at turn end. A failed turn or queued message leaves it active.",
   parameters: Schema.Struct({
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),
@@ -59,10 +60,14 @@ const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
     sectionId: Schema.optional(Schema.NullOr(TrimmedNonEmptyString)),
     beforeThreadId: Schema.optional(Schema.NullOr(ThreadId)),
     parentThreadId: Schema.optional(ThreadId),
+    remoteThread: Schema.optional(
+      Schema.Struct({ environmentId: EnvironmentId, threadId: ThreadId }),
+    ),
   }),
   success: Schema.Union([
     OrchestrationV2DispatchCommandResult,
     Schema.Struct({ settlesWhenTurnEnds: Schema.Literal(true) }),
+    Schema.Struct({ remoteThreadNestParent: Schema.NullOr(ThreadId) }),
   ]),
   failure: OrchestratorMcpFailure,
   failureMode: "return" as const,

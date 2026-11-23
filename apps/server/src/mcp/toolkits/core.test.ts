@@ -1864,7 +1864,30 @@ it.effect("MCP nest and unnest set a thread's placement, and a move away unnests
       }),
     ]);
 
+    // A linked environment's thread nests here through this machine's settings.
     dispatched.length = 0;
+    const settings = yield* ServerSettings.ServerSettingsService;
+    const remoteThread = { environmentId: "environment-box", threadId: "mcp:launch:box" };
+    const organizeRemote = (args: Record<string, unknown>) =>
+      server
+        .callTool({ name: "t3_thread_organize", arguments: { remoteThread, ...args } })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, clientScope("auto")),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    expect(
+      declaredFailure(yield* organizeRemote({ action: "pin", threadId: "spawned" })),
+    ).toMatchObject({ code: "invalid_request" });
+    const nested = yield* organizeRemote({ action: "nest", parentThreadId: "spawner" });
+    expect(nested.structuredContent).toEqual({ remoteThreadNestParent: "spawner" });
+    expect((yield* settings.getSettings).remoteThreadNestParents).toEqual([
+      { ...remoteThread, parentThreadId: "spawner" },
+    ]);
+    yield* organizeRemote({ action: "unnest" });
+    expect((yield* settings.getSettings).remoteThreadNestParents).toEqual([
+      { ...remoteThread, parentThreadId: null },
+    ]);
+    expect(dispatched).toEqual([]);
 
     expect((yield* call({ action: "unnest", sectionId: null })).isError).toBe(false);
     expect(dispatched.map((command) => command.type)).toEqual([
