@@ -147,16 +147,19 @@ const layerFor = (
             Effect.sync(() => {
               harness.log.push(command.type);
               harness.commands.push(command);
-              return { sequence: 1, storedEvents: [] } as never;
-            }),
-          sendToThread: (input) =>
-            Effect.sync(() => {
-              harness.log.push("send");
               return {
-                message: { id: input.messageId },
-                projection: {
-                  runs: [{ id: RunId.make("run-continued"), userMessageId: input.messageId }],
-                },
+                sequence: 1,
+                storedEvents:
+                  command.type === "message.dispatch"
+                    ? [
+                        {
+                          event: {
+                            type: "run.created",
+                            payload: { id: RunId.make("run-continued") },
+                          },
+                        },
+                      ]
+                    : [],
               } as never;
             }),
         }),
@@ -166,6 +169,10 @@ const layerFor = (
               harness.log.push("launch");
               harness.launches.push(input);
               return { threadId: ThreadId.make("thread-received"), resumed: false } as never;
+            }),
+          prepareRun: (input) =>
+            Effect.sync(() => {
+              harness.log.push(`prepare:${input.runId}`);
             }),
         }),
         Layer.mock(AgentSessionImporter.AgentSessionImporter)({
@@ -186,7 +193,11 @@ const layerFor = (
             Effect.succeedSome({ id, title: "App", workspaceRoot: options.workspaceRoot } as never),
         }),
         Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
-          resolve: () => Effect.succeed({ canonicalKey: "github.com/acme/app" } as never),
+          resolve: () =>
+            Effect.succeed({
+              canonicalKey: "github.com/acme/app",
+              locator: { source: "git-remote", remoteName: "origin", remoteUrl: "unused" },
+            } as never),
         }),
         Layer.mock(ProviderRegistry.ProviderRegistry)({
           getProviders: Effect.succeed([
@@ -256,6 +267,7 @@ const makeRepositories = Effect.fn("makeRepositories")(function* () {
   yield* git(laptop, "add", "a.txt");
   yield* git(laptop, "commit", "-m", "first");
   yield* git(laptop, "push", "origin", "HEAD:main");
+  yield* git(laptop, "remote", "set-head", "origin", "main");
   return { root, origin, laptop, claudeHome: path.join(root, "claude") };
 });
 
@@ -471,15 +483,29 @@ describe("ThreadMove.receive", () => {
           projectId: "box-app",
           modelSelection: { instanceId: "claude-box", model: "claude-opus" },
           runtimeMode: "auto-accept-edits",
-          workspaceStrategy: {
-            type: "existing_worktree",
-            worktreePath: received.worktreePath,
-            branch: "feature/x-2",
-          },
+          // The turn to continue takes the worktree, so setup runs once and before it.
+          workspaceStrategy: { type: "root" },
           importedNativeThread: { ref: { driver: "claudeAgent", nativeId: sessionId } },
         });
+        expect(harness.commands[0]).toMatchObject({
+          type: "message.dispatch",
+          text: "Continue.",
+          dispatchMode: {
+            type: "defer_start",
+            workspaceStrategy: {
+              type: "existing_worktree",
+              worktreePath: received.worktreePath,
+              branch: "feature/x-2",
+            },
+          },
+        });
         // History lands before the first turn, so a turn never runs without it.
-        expect(harness.log).toEqual(["launch", "history", "send"]);
+        expect(harness.log).toEqual([
+          "launch",
+          "history",
+          "message.dispatch",
+          "prepare:run-continued",
+        ]);
         expect(harness.histories[0]).toHaveLength(1);
         const written = yield* fileSystem.readFileString(
           path.join(

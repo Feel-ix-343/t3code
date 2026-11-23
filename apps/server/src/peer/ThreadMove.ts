@@ -47,6 +47,7 @@ import * as PeerMcpClient from "./PeerMcpClient.ts";
 import {
   claudeProjectDirectoryName,
   continueMessage,
+  MAX_EXPANDED_TRANSCRIPT_BYTES,
   MAX_MOVED_TRANSCRIPT_BYTES,
   movedBranchName,
   movedHistory,
@@ -323,11 +324,27 @@ const make = Effect.gen(function* () {
     const projectId =
       input.targetProjectId ?? (yield* resolveRemoteProject(call, project.workspaceRoot));
 
-    // The work goes through the repository's shared remote, which both sides reach.
+    // A submodule's uncommitted files are not part of the superproject's snapshot.
+    const dirtySubmodules = yield* runGit("submodules", cwd, [
+      "submodule",
+      "foreach",
+      "--quiet",
+      "--recursive",
+      'test -z "$(git status --porcelain)" || echo "$displaypath"',
+    ]).pipe(Effect.orElseSucceed(() => ({ ok: true, stdout: "", stderr: "" })));
+    if (dirtySubmodules.stdout !== "") {
+      return yield* failure(
+        `Commit or discard the changes in ${dirtySubmodules.stdout.split("\n").join(", ")} first: a move carries only the main repository's uncommitted work.`,
+      );
+    }
+    // The work goes through the remote the repository is matched by, which both sides reach.
     const snapshot = yield* snapshotCommit(cwd, thread.title);
-    const remote = yield* git
-      .resolvePrimaryRemoteName(cwd)
-      .pipe(Effect.mapError(() => failure("The checkout has no remote to push its work to.")));
+    const identity = yield* repositoryIdentities.resolve(cwd);
+    const remote =
+      identity?.locator.remoteName ??
+      (yield* git
+        .resolvePrimaryRemoteName(cwd)
+        .pipe(Effect.mapError(() => failure("The checkout has no remote to push its work to."))));
     const currentBranch = yield* runGit("branch", cwd, ["rev-parse", "--abbrev-ref", "HEAD"]).pipe(
       Effect.map((result) => (result.ok ? result.stdout : null)),
       Effect.orElseSucceed(() => null),
@@ -360,6 +377,11 @@ const make = Effect.gen(function* () {
       sessionId == null
         ? null
         : yield* readClaudeTranscript(thread.modelSelection.instanceId, sessionId, cwd);
+    const driver =
+      providerThread?.driver ??
+      (yield* providers.getProviders).find(
+        (provider) => provider.instanceId === thread.modelSelection.instanceId,
+      )?.driver;
     const activeRun = records.runs.filter(ThreadManagement.isActiveRun).at(-1);
     const message =
       input.message ??
@@ -373,6 +395,8 @@ const make = Effect.gen(function* () {
         projectId,
         title: thread.title,
         modelSelection: thread.modelSelection,
+        ...(driver === undefined ? {} : { driver }),
+        ...(identity === null ? {} : { repository: identity.canonicalKey }),
         branch,
         commit: snapshot.commit,
         history: movedHistory(records.messages, DateTime.formatIso),
@@ -468,9 +492,11 @@ const make = Effect.gen(function* () {
       const available = yield* providers.getProviders;
       const instance =
         available.find((provider) => provider.instanceId === input.modelSelection.instanceId) ??
-        (input.claudeSession === undefined
-          ? undefined
-          : available.find((provider) => provider.driver === CLAUDE_DRIVER));
+        available.find(
+          (provider) =>
+            provider.driver ===
+            (input.driver ?? (input.claudeSession === undefined ? undefined : CLAUDE_DRIVER)),
+        );
       if (instance === undefined) {
         return yield* refuse(
           `No provider instance ${input.modelSelection.instanceId} here to continue the thread.`,
@@ -478,11 +504,22 @@ const make = Effect.gen(function* () {
       }
       const modelSelection = { ...input.modelSelection, instanceId: instance.instanceId };
 
-      const remote = yield* git
-        .resolvePrimaryRemoteName(root)
-        .pipe(
-          Effect.mapError(() => refuse("The project here has no remote to fetch the work from.")),
-        );
+      yield* gitOrFail("branch-name", root, ["check-ref-format", "--branch", input.branch], () =>
+        refuse(`${input.branch} is not a branch name.`),
+      );
+      // The remote the repository is matched by here, which the work was pushed to there.
+      const identity = yield* repositoryIdentities.resolve(root);
+      const remote =
+        identity !== null &&
+        (input.repository === undefined || identity.canonicalKey === input.repository)
+          ? identity.locator.remoteName
+          : yield* git
+              .resolvePrimaryRemoteName(root)
+              .pipe(
+                Effect.mapError(() =>
+                  refuse("The project here has no remote to fetch the work from."),
+                ),
+              );
       yield* gitOrFail(
         "fetch",
         root,
@@ -534,9 +571,9 @@ const make = Effect.gen(function* () {
       if (input.claudeSession !== undefined && instance.driver === CLAUDE_DRIVER) {
         const session = input.claudeSession;
         resumed = yield* Effect.gen(function* () {
-          const text = NodeZlib.gunzipSync(Buffer.from(session.transcript, "base64")).toString(
-            "utf8",
-          );
+          const text = NodeZlib.gunzipSync(Buffer.from(session.transcript, "base64"), {
+            maxOutputLength: MAX_EXPANDED_TRANSCRIPT_BYTES,
+          }).toString("utf8");
           const directory = path.join(
             yield* claudeConfigDir(instance.instanceId),
             "projects",
@@ -558,6 +595,12 @@ const make = Effect.gen(function* () {
       }
 
       const commandId = CommandId.make(`thread-move:${yield* random.uuidV4()}`);
+      const continuation = input.message?.trim() ? input.message : undefined;
+      const worktreeStrategy = {
+        type: "existing_worktree" as const,
+        worktreePath,
+        branch: localBranch,
+      };
       const launched = yield* launches
         .launch({
           commandId,
@@ -567,7 +610,9 @@ const make = Effect.gen(function* () {
           modelSelection,
           runtimeMode: modes.runtimeMode,
           interactionMode: modes.interactionMode,
-          workspaceStrategy: { type: "existing_worktree", worktreePath, branch: localBranch },
+          // A turn to continue takes the worktree with its own preparation below, so the setup
+          // script runs once, before that turn.
+          workspaceStrategy: continuation === undefined ? worktreeStrategy : { type: "root" },
           ...(resumed && input.claudeSession !== undefined
             ? {
                 importedNativeThread: {
@@ -589,7 +634,7 @@ const make = Effect.gen(function* () {
               new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
           ),
         );
-      // Without a session to resume, the first turn here gets this history as its context.
+      // Before any turn: without a session to resume, the first one gets this history as context.
       yield* importer.importHistory({ threadId: launched.threadId, messages: input.history }).pipe(
         Effect.mapError(
           () =>
@@ -600,27 +645,39 @@ const make = Effect.gen(function* () {
         ),
       );
       let runId: ThreadReceiveResult["runId"] = null;
-      if (input.message !== undefined && input.message.trim() !== "") {
-        const sent = yield* threads
-          .sendToThread({
-            projectId: input.projectId,
-            commandId: CommandId.make(`${commandId}:continue`),
+      if (continuation !== undefined) {
+        const continueCommandId = CommandId.make(`${commandId}:continue`);
+        const accepted = yield* threads
+          .dispatch({
+            type: "message.dispatch",
+            commandId: continueCommandId,
             threadId: launched.threadId,
             messageId: MessageId.make(`${commandId}:continue`),
-            text: input.message,
+            text: continuation,
             attachments: [],
-            mode: "auto",
+            modelSelection,
+            dispatchMode: { type: "defer_start", workspaceStrategy: worktreeStrategy },
             createdBy: "agent",
             creationSource: "mcp",
           })
           .pipe(
             Effect.mapError(
-              (error) =>
-                new OrchestratorMcpFailure({ code: "orchestration_error", message: error.message }),
+              () =>
+                new OrchestratorMcpFailure({
+                  code: "orchestration_error",
+                  message: "Could not start the thread's next turn.",
+                }),
             ),
           );
-        runId =
-          sent.projection.runs.find((run) => run.userMessageId === sent.message.id)?.id ?? null;
+        const created = accepted.storedEvents.find((stored) => stored.event.type === "run.created");
+        if (created?.event.type === "run.created") {
+          runId = created.event.payload.id;
+          yield* launches.prepareRun({
+            commandId: continueCommandId,
+            threadId: launched.threadId,
+            runId,
+          });
+        }
       }
       return {
         threadId: launched.threadId,

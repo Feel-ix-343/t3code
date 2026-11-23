@@ -2255,7 +2255,7 @@ it.effect("t3_thread_transfer move hands the thread to ThreadMove; only links ma
       title: "Moved",
       modelSelection: { instanceId: "codex", model: "gpt-5" },
       branch: "feature/x",
-      commit: "abc",
+      commit: "0123456789abcdef0123456789abcdef01234567",
       history: [],
     };
     // An agent, or a client that is not a link, neither sees nor reaches it.

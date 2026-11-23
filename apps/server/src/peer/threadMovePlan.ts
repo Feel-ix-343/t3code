@@ -2,6 +2,7 @@ import {
   IsoDateTime,
   ModelSelection,
   ProjectId,
+  ProviderDriverKind,
   RunId,
   ThreadId,
   TrimmedNonEmptyString,
@@ -11,6 +12,13 @@ import * as Schema from "effect/Schema";
 
 /** Above this, a gzipped Claude transcript stays here and the thread moves with its history only. */
 export const MAX_MOVED_TRANSCRIPT_BYTES = 24 * 1024 * 1024;
+
+/** Claude Code names a session file by its UUID; anything else could name a path. */
+const ClaudeSessionId = Schema.String.check(
+  Schema.isPattern(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i),
+);
+/** Expanded, a transcript stops here; a larger one moves with its history only. */
+export const MAX_EXPANDED_TRANSCRIPT_BYTES = 512 * 1024 * 1024;
 
 export const MovedHistoryMessage = Schema.Struct({
   role: Schema.Literals(["user", "assistant"]),
@@ -24,17 +32,21 @@ export const ThreadReceiveInput = Schema.Struct({
   projectId: ProjectId,
   title: TrimmedNonEmptyString,
   modelSelection: ModelSelection,
+  /** The provider's driver, so another instance of it here can take the thread. */
+  driver: Schema.optional(ProviderDriverKind),
+  /** The repository's canonical key, so this side fetches from the same remote. */
+  repository: Schema.optional(TrimmedNonEmptyString),
   /** A branch on the repository's shared remote that holds `commit`. */
   branch: TrimmedNonEmptyString,
-  commit: TrimmedNonEmptyString,
+  commit: Schema.String.check(Schema.isPattern(/^[0-9a-f]{40,64}$/)),
   history: Schema.Array(MovedHistoryMessage),
   /** The Claude Code session to resume here, its transcript gzipped and base64-encoded. */
   claudeSession: Schema.optional(
     Schema.Struct({
-      sessionId: TrimmedNonEmptyString,
+      sessionId: ClaudeSessionId,
       /** The checkout it ran in there, so the transcript's paths can point here instead. */
       cwd: TrimmedNonEmptyString,
-      transcript: Schema.String,
+      transcript: Schema.String.check(Schema.isMaxLength(MAX_MOVED_TRANSCRIPT_BYTES)),
     }),
   ),
   message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
@@ -85,15 +97,20 @@ export function rehomeClaudeTranscript(text: string, from: string, to: string): 
 }
 
 /**
- * The branch a moved thread's work is pushed to: its own, unless it has none or works on the
- * default branch, which a move must not publish work-in-progress to.
+ * The branch a moved thread's work is pushed to: its own, unless it has none, works on the
+ * default branch, or the default branch is unknown: a move must not publish work-in-progress to it.
  */
 export function movedBranchName(input: {
   readonly branch: string | null;
   readonly defaultBranch: string | null;
   readonly threadId: string;
 }): string {
-  if (input.branch !== null && input.branch !== "HEAD" && input.branch !== input.defaultBranch) {
+  if (
+    input.branch !== null &&
+    input.branch !== "HEAD" &&
+    input.defaultBranch !== null &&
+    input.branch !== input.defaultBranch
+  ) {
     return input.branch;
   }
   const suffix = input.threadId.replace(/[^a-zA-Z0-9]/g, "").slice(-8) || "thread";
