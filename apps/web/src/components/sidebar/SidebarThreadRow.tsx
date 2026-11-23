@@ -42,7 +42,7 @@ import {
   AlarmClockOffIcon,
   ArrowRightLeftIcon,
   CheckIcon,
-  ChevronRightIcon,
+  ChevronDownIcon,
   CircleAlertIcon,
   CircleCheckIcon,
   CircleDashedIcon,
@@ -149,6 +149,9 @@ export type SidebarProviderEntry = Pick<
   | "acpRegistryIconUrl"
   | "models"
 >;
+/** How far each nesting level steps in, in rem. */
+const NEST_INDENT_REM = 1.5;
+
 function compactSidebarTimeLabel(timestamp: string, nowMs: number, resolve: MessageResolver) {
   const parts = formatRelativeTime(timestamp, nowMs, resolve);
   if (parts === null) return "";
@@ -1021,6 +1024,12 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     }
   };
 
+  const nestedCount = props.nestedCount ?? 0;
+  const onToggleNest = props.onToggleNest;
+  const hasNestToggle = nestedCount > 0 && onToggleNest !== undefined;
+  // An open group's parent is tinted, as in the Claude app, so the group reads as one block.
+  const nestGroupOpen = hasNestToggle && !props.nestCollapsed;
+
   const rowSurfaceClassName = cn(
     "group/sidebar-row relative w-full cursor-pointer overflow-hidden rounded-md text-left outline-none select-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring",
     variantAction === "unsettle" &&
@@ -1038,19 +1047,24 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     shouldRecede &&
       (status === "preparing" || status === "working") &&
       "opacity-70 transition-opacity hover:opacity-100 focus-within:opacity-100 motion-reduce:transition-none",
+    nestGroupOpen &&
+      !props.isActive &&
+      !isSelected &&
+      props.sweepAction === null &&
+      "bg-sidebar-row-hover light:bg-sidebar-control-surface/70",
     isFileDragOver && "ring-1 ring-inset ring-primary/70",
     isFileDragOver && !props.isActive && !isSelected && "bg-sidebar-row-hover",
     props.sortable?.isDragging &&
       "bg-sidebar bg-linear-to-b from-sidebar-row-active to-sidebar-row-active text-sidebar-foreground opacity-100 shadow-lg",
   );
-  // One step lines a child's title up past its parent's disclosure.
-  const nestIndent = (props.nestDepth ?? 0) > 0 ? `${props.nestDepth}rem` : undefined;
+  // Each level steps clearly in from its parent's title, as the Claude app does.
+  const nestIndent =
+    (props.nestDepth ?? 0) > 0 ? `${(props.nestDepth ?? 0) * NEST_INDENT_REM}rem` : undefined;
   const sortable = props.sortable;
   const sortableRootProps = sortable
     ? {
         ref: sortable.setNodeRef,
         style: {
-          paddingInlineStart: nestIndent,
           transform: CSS.Translate.toString(sortable.transform),
           transition: sortable.transition,
           // A zero-height boundary also makes dnd-kit scale the source to
@@ -1062,7 +1076,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
         },
         ...sortable.listeners,
       }
-    : { style: { paddingInlineStart: nestIndent } };
+    : {};
   const destinationVerb = sortable?.isDragging
     ? props.dropVerb
     : props.sweepAction === "unsnooze"
@@ -1096,7 +1110,9 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     <span
       ref={isRegeneratingTitle ? observeVisibleAnimation : undefined}
       className={cn(
-        "min-w-0 flex-1 text-start text-sm transition-opacity motion-reduce:transition-none",
+        "min-w-0 text-start text-sm transition-opacity motion-reduce:transition-none",
+        // A parent's disclosure follows its title, so the title takes only its own width.
+        hasNestToggle ? "flex-initial" : "flex-1",
         shouldRecede || variant === "folder" || variant === "folder-multiline"
           ? "font-normal"
           : "font-medium",
@@ -1131,30 +1147,30 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
     </span>
   );
 
-  const nestedCount = props.nestedCount ?? 0;
-  const onToggleNest = props.onToggleNest;
-  const nestToggle =
-    nestedCount > 0 && onToggleNest !== undefined ? (
-      <button
-        type="button"
-        aria-expanded={!props.nestCollapsed}
-        aria-label={gt("Spawned threads")}
-        data-testid="sidebar-nest-toggle"
-        className="-me-1 flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded-sm text-xs text-sidebar-muted-foreground tabular-nums outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-        onPointerDown={(event) => event.stopPropagation()}
-        onKeyDown={(event) => event.stopPropagation()}
-        onClick={(event) => {
-          event.stopPropagation();
-          onToggleNest(threadKey);
-        }}
-      >
-        <ChevronRightIcon
-          aria-hidden
-          className={cn("size-3 transition-transform", !props.nestCollapsed && "rotate-90")}
-        />
-        {props.nestCollapsed ? nestedCount : null}
-      </button>
-    ) : null;
+  const nestToggle = hasNestToggle ? (
+    <button
+      type="button"
+      aria-expanded={!props.nestCollapsed}
+      aria-label={gt("Spawned threads")}
+      data-testid="sidebar-nest-toggle"
+      className="-ms-1 flex h-5 shrink-0 cursor-pointer items-center gap-0.5 rounded-sm px-0.5 text-xs text-sidebar-muted-foreground tabular-nums outline-none hover:text-sidebar-foreground focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+      onPointerDown={(event) => event.stopPropagation()}
+      onKeyDown={(event) => event.stopPropagation()}
+      onClick={(event) => {
+        event.stopPropagation();
+        onToggleNest?.(threadKey);
+      }}
+    >
+      {props.nestCollapsed ? nestedCount : null}
+      <ChevronDownIcon
+        aria-hidden
+        className={cn(
+          "size-3.5 transition-transform motion-reduce:transition-none",
+          props.nestCollapsed && "-rotate-90",
+        )}
+      />
+    </button>
+  ) : null;
 
   const prBadgeShape = supportsMultiplePullRequests
     ? resolveThreadPullRequestBadge(thread.pullRequests)
@@ -1396,6 +1412,14 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 aria-current={accessibility.current}
                 data-testid={inFolder ? "sidebar-row-folder" : "sidebar-row-slim"}
                 aria-busy={isRegeneratingTitle || undefined}
+                // The row's surface spans the list; only its content steps in.
+                style={
+                  nestIndent === undefined
+                    ? undefined
+                    : {
+                        paddingInlineStart: `calc(${inFolder ? "var(--sidebar-row-content-inset)" : "0.625rem"} + ${nestIndent})`,
+                      }
+                }
                 className={cn(
                   rowSurfaceClassName,
                   multiline
@@ -1432,8 +1456,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
                 </span>
               )}
               {draftIndicator}
-              {nestToggle}
               {title}
+              {nestToggle}
               {multiline ? titleLineIcons : null}
               {/* Folder-style pinned rows sit under a pinned header; unpin lives in the … menu. */}
               {inFolder ? null : pinIndicator}
@@ -1623,6 +1647,7 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               data-testid="sidebar-row-card"
               aria-busy={isRegeneratingTitle || undefined}
               className={rowSurfaceClassName}
+              style={nestIndent === undefined ? undefined : { paddingInlineStart: nestIndent }}
               onClick={handleClick}
               onDoubleClick={handleDoubleClick}
               onKeyDown={handleKeyDown}
@@ -1794,8 +1819,8 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
               {props.sweepAction !== null ? dragDestination : null}
             </div>
             <div className="mt-1 flex min-w-0 items-center gap-1.5">
-              {nestToggle}
               {title}
+              {nestToggle}
               {isRegeneratingTitle ? (
                 <span role="status" className="sr-only">
                   <T>Regenerating title</T>
