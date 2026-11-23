@@ -31,6 +31,11 @@ export const peerLinkListsAtom = environmentAtomList("peer-links:lists", (enviro
   peerLinkEnvironment.list({ environmentId, input: {} }),
 );
 
+/** Each environment's linked environments by name, in the order of the ids. Probes nothing. */
+export const peerLinkNamesAtom = environmentAtomList("peer-links:names", (environmentId) =>
+  peerLinkEnvironment.names({ environmentId, input: {} }),
+);
+
 /** Whether `environmentId` offers links, so its threads may name another machine. */
 export const offersLinkedEnvironmentsAtom = Atom.family((environmentId: EnvironmentId) =>
   Atom.make((get) =>

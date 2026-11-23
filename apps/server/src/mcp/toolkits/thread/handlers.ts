@@ -13,7 +13,9 @@ import * as Effect from "effect/Effect";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import { modelSelectionCommandType } from "@t3tools/shared/model";
 import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
+import { formatThreadLink } from "@t3tools/shared/threadLinks";
 
+import { assertNotLinked } from "../../linkOrigin.ts";
 import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import {
@@ -29,6 +31,7 @@ import * as ThreadSearch from "../../../orchestration-v2/ThreadSearch.ts";
 import * as ScheduledTasks from "../../../scheduledTasks/ScheduledTaskService.ts";
 import { queuedRunsInDeliveryOrder } from "../../../orchestration-v2/QueuedRunOrder.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
+import * as ThreadMove from "../../../peer/ThreadMove.ts";
 import {
   type ArrangeWrite,
   effectivePinSection,
@@ -194,8 +197,34 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
       (input) => [input.threadId, input.targetThreadId],
       (input) =>
         Effect.gen(function* () {
-          const sourcePoint = input.sourcePoint ?? { type: "latest_stable" as const };
           const { threads, projection } = yield* readThread(input.threadId);
+          if (input.action === "move") {
+            const toEnvironmentId = yield* required(input.toEnvironmentId, "toEnvironmentId");
+            yield* assertNotLinked(yield* readCaller(), "use this environment's links");
+            const moved = yield* ThreadMove.ThreadMove.pipe(
+              Effect.flatMap((threadMove) =>
+                threadMove.move({
+                  threadId: projection.thread.id,
+                  targetEnvironmentId: toEnvironmentId,
+                  ...(input.toProjectId === undefined
+                    ? {}
+                    : { targetProjectId: input.toProjectId }),
+                }),
+              ),
+              Effect.mapError(
+                (error) =>
+                  new OrchestratorMcpFailure({ code: "invalid_request", message: error.message }),
+              ),
+            );
+            return {
+              ...moved,
+              link: formatThreadLink(
+                { environmentId: moved.environmentId, threadId: moved.threadId },
+                projection.thread.title,
+              ),
+            };
+          }
+          const sourcePoint = input.sourcePoint ?? { type: "latest_stable" as const };
           const commandId = yield* newCommandId();
           if (input.action === "merge_back") {
             const targetThreadId = yield* required(input.targetThreadId, "targetThreadId");
@@ -229,6 +258,20 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           return { sequence: result.sequence, targetThreadId };
         }),
     ),
+  ),
+  t3_thread_receive: McpToolAccess.startsThreads(
+    () => ({}),
+    (input, modes) =>
+      Effect.gen(function* () {
+        // Its EnabledWhen keeps every caller but a peer link from reaching it.
+        const scope = yield* McpInvocationContext.McpInvocationContext;
+        const received = yield* (yield* ThreadMove.ThreadMove).receive(input, modes);
+        return {
+          ...received,
+          link: McpInvocationContext.threadLinkFor(scope, received.threadId, input.title),
+        };
+      }),
+    "stamped",
   ),
   t3_thread_configure: McpToolAccess.either(
     (input) => input.modelSelection === undefined,

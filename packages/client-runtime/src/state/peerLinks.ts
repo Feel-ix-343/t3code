@@ -113,6 +113,11 @@ export function createPeerLinkEnvironmentAtoms<R, E>(
       tag: WS_METHODS.peerLinksUnlink,
       onSuccess: ({ environmentId }, registry) => refreshLinks(registry, environmentId),
     }),
+    /** Moves a thread on `environmentId` to one of its linked environments, where it continues. */
+    moveThread: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:peer-links:move-thread",
+      tag: WS_METHODS.peerLinksMoveThread,
+    }),
     threadView: (target: LinkedThreadViewTarget) => threadView(threadViewKey(target)),
     lastThreadView: (target: LinkedThreadViewTarget) => lastThreadView(threadViewKey(target)),
     /** One item of a linked environment's thread in full, for a row the reader opened. */

@@ -602,6 +602,14 @@ function WorkEntryLogRow(props: WorkEntryRowProps) {
                   environmentId={ctx.activeThreadEnvironmentId}
                   linked
                 />
+              ) : noticeMessage?.includes("t3-thread://") ? (
+                // A notice that names another thread, such as where a moved thread went, links it.
+                <ChatMarkdown
+                  inline
+                  text={noticeMessage}
+                  cwd={ctx.markdownCwd}
+                  parseRawHtml={false}
+                />
               ) : (
                 previewText
               )}

@@ -11,6 +11,7 @@ import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
 import * as PeerLinks from "./peer/PeerLinks.ts";
 import * as PeerThreadRelay from "./peer/PeerThreadRelay.ts";
+import * as ThreadMove from "./peer/ThreadMove.ts";
 
 import * as DateTime from "effect/DateTime";
 import * as Duration from "effect/Duration";
@@ -1571,6 +1572,7 @@ export const layerWsRpc = (
       const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
       const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
       const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
+      const threadMove = yield* ThreadMove.ThreadMove;
       const startup = yield* ServerRuntimeStartup.ServerRuntimeStartup;
       const workspaceEntries = yield* WorkspaceEntries.WorkspaceEntries;
       const workspaceFolders = yield* WorkspaceFolders.WorkspaceFolders;
@@ -2748,6 +2750,10 @@ export const layerWsRpc = (
           peerClientPairing.request(input, currentSession),
         [WS_METHODS.peerLinksPairLink]: (input) =>
           peerClientPairing.requestForLink(input, currentSession),
+        [WS_METHODS.peerLinksMoveThread]: (input) =>
+          Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
+            Effect.andThen(threadMove.move(input)),
+          ),
         [WS_METHODS.peerLinksAnswerRequest]: (input) =>
           Effect.annotateCurrentSpan({ "orchestration_v2.thread_id": input.threadId }).pipe(
             Effect.andThen(peerLinkRequests.answer(input)),
@@ -3708,6 +3714,7 @@ export const layer = Layer.unwrap(
     const peerLinkRequests = yield* PeerLinkRequests.PeerLinkRequests;
     const peerThreadRelay = yield* PeerThreadRelay.PeerThreadRelay;
     const peerClientPairing = yield* PeerClientPairing.PeerClientPairing;
+    const threadMove = yield* ThreadMove.ThreadMove;
     const sql = yield* SqlClient.SqlClient;
     return HttpRouter.add(
       "GET",
@@ -3810,6 +3817,7 @@ export const layer = Layer.unwrap(
               Layer.provide(Layer.succeed(PeerLinkRequests.PeerLinkRequests, peerLinkRequests)),
               Layer.provide(Layer.succeed(PeerThreadRelay.PeerThreadRelay, peerThreadRelay)),
               Layer.provide(Layer.succeed(PeerClientPairing.PeerClientPairing, peerClientPairing)),
+              Layer.provide(Layer.succeed(ThreadMove.ThreadMove, threadMove)),
               Layer.provide(
                 SourceControlDiscovery.layer.pipe(
                   Layer.provide(

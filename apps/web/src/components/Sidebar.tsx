@@ -264,6 +264,7 @@ import {
   useActiveRowReveal,
 } from "./sidebar/routeReveal";
 import { stackedThreadToast, toastManager } from "./ui/toast";
+import { useMoveThread, useThreadMoveTargets } from "./useThreadMove";
 import { titleRegenerationToast } from "./threadTitleRegenerationToast";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import { threadChipCopyTarget } from "@t3tools/client-runtime/thread-reference";
@@ -1520,6 +1521,9 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const threadByKeyRef = useRef(threadByKey);
   const settledThreadKeysRef = useRef(settledThreadKeys);
   const snoozedThreadKeysRef = useRef(snoozedThreadKeys);
+  const moveTargets = useThreadMoveTargets();
+  const moveTargetsRef = useRef(moveTargets);
+  const moveThread = useMoveThread();
 
   const { draftIds, routeDraftComposer } = useSidebarDrafts(scopedProjectKeys, routeDraftIdForRows);
   // Draft rows sit above the threads, so jumps and traversal reach them first.
@@ -1903,6 +1907,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     settledThreadKeysRef.current = settledThreadKeys;
     snoozedThreadKeysRef.current = snoozedThreadKeys;
     sectionByThreadKeyRef.current = sectionByThreadKey;
+    moveTargetsRef.current = moveTargets;
   });
   const startActionSweep = useStableCallback(
     (threadRef: ScopedThreadRef, action: SidebarSweepAction, event: PointerEvent) => {
@@ -3368,6 +3373,20 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 },
               ]
             : [];
+        const threadMoveTargets = moveTargetsRef.current.get(thread.environmentId) ?? [];
+        const moveMenu: ContextMenuItem<ThreadActionMenuId>[] =
+          threadMoveTargets.length === 0
+            ? []
+            : [
+                {
+                  id: "move-environment",
+                  label: gt("Move to environment"),
+                  children: threadMoveTargets.map((target) => ({
+                    id: `move:${target.environmentId}` as const,
+                    label: target.label,
+                  })),
+                },
+              ];
         const clicked = await settlePromise(() =>
           api.contextMenu.show(
             withSectionMenu(
@@ -3406,7 +3425,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 },
                 snoozePresets,
               }),
-              sectionMenu,
+              [...sectionMenu, ...moveMenu],
             ),
             position,
             source,
@@ -3424,6 +3443,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                 : choice;
           if (choice === "new" && sectionId === null) return;
           await moveThreadToSidebarSection(thread, sectionId, { justCreated: choice === "new" });
+          return;
+        }
+        if (clicked.value.startsWith("move:")) {
+          const target = threadMoveTargets.find(
+            (candidate) => `move:${candidate.environmentId}` === clicked.value,
+          );
+          if (target) await moveThread(thread, target);
           return;
         }
         if (clicked.value?.startsWith("snooze:")) {

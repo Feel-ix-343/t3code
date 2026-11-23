@@ -57,6 +57,7 @@ import * as AgentSessionScanner from "../../project/AgentSessionScanner.ts";
 import * as ProviderRegistry from "../../provider/ProviderRegistry.ts";
 import * as SecretRequests from "../../secrets/SecretRequests.ts";
 import * as RemoteDelegation from "../../peer/RemoteDelegation.ts";
+import * as ThreadMove from "../../peer/ThreadMove.ts";
 import * as ScheduledTaskService from "../../scheduledTasks/ScheduledTaskService.ts";
 import * as ServerSettings from "../../serverSettings.ts";
 import * as McpHttpServer from "../McpHttpServer.ts";
@@ -92,6 +93,7 @@ const layerNoSessionSync = Layer.mergeAll(
   Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
   Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
   Layer.mock(ProjectService.ProjectService)({}),
+  Layer.mock(ThreadMove.ThreadMove)({}),
 );
 
 const threadToolkitWithSettings = (
@@ -106,6 +108,7 @@ const threadToolkitWithSettings = (
     Layer.provide(Layer.mock(AgentSessionImporter.AgentSessionImporter)(sessions.importer ?? {})),
     Layer.provide(Layer.mock(AgentSessionScanner.AgentSessionScanner)(sessions.scanner ?? {})),
     Layer.provide(Layer.mock(ProjectService.ProjectService)(sessions.projects ?? {})),
+    Layer.provide(Layer.mock(ThreadMove.ThreadMove)({})),
     Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
     Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
     Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
@@ -2208,6 +2211,121 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
             },
           }),
         ),
+      ),
+    ),
+  );
+});
+
+it.effect("t3_thread_transfer move hands the thread to ThreadMove; only links may receive", () => {
+  const shell = McpToolAccessTestkit.liveThreadShell(threadId);
+  const moves: Array<unknown> = [];
+  const received: Array<unknown> = [];
+  const box = EnvironmentId.make("box");
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const call = (
+      name: string,
+      args: Record<string, unknown>,
+      invocation: McpInvocationContext.McpInvocationScope,
+    ) =>
+      server
+        .callTool({ name, arguments: args })
+        .pipe(
+          Effect.provideService(McpInvocationContext.McpInvocationContext, invocation),
+          Effect.provideService(McpSchema.McpServerClient, client),
+        );
+    const moved = yield* call(
+      "t3_thread_transfer",
+      { action: "move", toEnvironmentId: box, toProjectId: "box-app" },
+      scope,
+    );
+    expect(moves).toEqual([
+      { threadId, targetEnvironmentId: box, targetProjectId: ProjectId.make("box-app") },
+    ]);
+    expect(moved.structuredContent).toMatchObject({
+      threadId: "thread-on-box",
+      link: expect.stringContaining("t3-thread://"),
+    });
+    expect(
+      declaredFailure(yield* call("t3_thread_transfer", { action: "move" }, scope)),
+    ).toMatchObject({ code: "invalid_request", message: "This action needs `toEnvironmentId`." });
+
+    const receive = {
+      projectId: "box-app",
+      title: "Moved",
+      modelSelection: { instanceId: "codex", model: "gpt-5" },
+      branch: "feature/x",
+      commit: "0123456789abcdef0123456789abcdef01234567",
+      history: [],
+    };
+    // An agent, or a client that is not a link, neither sees nor reaches it.
+    for (const invocation of [scope, clientScope("full-access")]) {
+      const refused = yield* Effect.flip(call("t3_thread_receive", receive, invocation));
+      expect(refused.message).toContain("not found");
+    }
+    const linked = clientScope("auto-accept-edits");
+    const fromLink = yield* call("t3_thread_receive", receive, {
+      ...linked,
+      client: { ...linked.client!, linked: true },
+    });
+    expect(fromLink.isError).toBe(false);
+    // The receiving thread runs at the link's modes, stamped with its link.
+    expect(received).toMatchObject([
+      { runtimeMode: "auto-accept-edits", linkOrigin: { sessionId: "session-1" } },
+    ]);
+  }).pipe(
+    Effect.provide(
+      McpHttpServer.layerThreadToolkit.pipe(
+        Layer.provide(
+          Layer.mergeAll(
+            Layer.mock(AgentSessionImporter.AgentSessionImporter)({}),
+            Layer.mock(AgentSessionScanner.AgentSessionScanner)({}),
+            Layer.mock(ProjectService.ProjectService)({}),
+            Layer.mock(ThreadMove.ThreadMove)({
+              move: (input) =>
+                Effect.sync(() => {
+                  moves.push(input);
+                  return {
+                    environmentId: box,
+                    threadId: ThreadId.make("thread-on-box"),
+                    projectId: ProjectId.make("box-app"),
+                    branch: "feature/x",
+                    worktreePath: "/box/wt",
+                    commit: "abc",
+                    wipCommit: false,
+                    context: "history" as const,
+                    continued: false,
+                  };
+                }),
+              receive: (_input, modes) =>
+                Effect.sync(() => {
+                  received.push(modes);
+                  return {
+                    threadId: ThreadId.make("thread-received"),
+                    branch: "feature/x",
+                    worktreePath: "/box/wt",
+                    context: "history" as const,
+                    runId: null,
+                  };
+                }),
+            }),
+          ),
+        ),
+        Layer.provide(ServerSettings.ServerSettingsService.layerTest()),
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: () => Effect.succeed(shell),
+            getProjectThreadRecords: () =>
+              Effect.succeed(McpToolAccessTestkit.idleThreadProjection(shell)),
+          }),
+        ),
+        Layer.provide(Layer.mock(ThreadSearch.ThreadSearch)({})),
+        Layer.provide(Layer.mock(ScheduledTaskService.ScheduledTaskService)({})),
+        Layer.provide(Layer.mock(PeerForwarding.PeerForwarding)({})),
+        Layer.provide(Layer.mock(PeerLinkRequests.PeerLinkRequests)({})),
+        Layer.provide(Layer.mock(PeerLinks.PeerLinks)({})),
       ),
     ),
   );

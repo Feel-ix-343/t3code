@@ -1,7 +1,13 @@
 import * as Schema from "effect/Schema";
 
 import { AuthEnvironmentScope, AuthMcpClientAccess } from "./auth.ts";
-import { EnvironmentId, ThreadId, TrimmedNonEmptyString, TurnItemId } from "./baseSchemas.ts";
+import {
+  EnvironmentId,
+  ProjectId,
+  ThreadId,
+  TrimmedNonEmptyString,
+  TurnItemId,
+} from "./baseSchemas.ts";
 
 /**
  * A link from this environment to another one (the peer). This environment
@@ -282,3 +288,35 @@ export class PeerLinkRequestError extends Schema.TaggedError<PeerLinkRequestErro
     return PEER_LINK_REQUEST_FAILURE_MESSAGES[this.reason];
   }
 }
+
+/** Moves a thread here to a linked environment, where it continues. */
+export const ThreadMoveInput = Schema.Struct({
+  threadId: ThreadId,
+  targetEnvironmentId: EnvironmentId,
+  /** The project there; default the one with this thread's repository. */
+  targetProjectId: Schema.optional(ProjectId),
+  /** First message there. Default: a request to continue when a turn was running here. */
+  message: Schema.optional(Schema.String.check(Schema.isMaxLength(120000))),
+});
+export type ThreadMoveInput = typeof ThreadMoveInput.Type;
+
+export const ThreadMoveResult = Schema.Struct({
+  environmentId: EnvironmentId,
+  threadId: ThreadId,
+  projectId: ProjectId,
+  branch: Schema.String,
+  worktreePath: Schema.String,
+  /** The commit the checkout there starts from, as pushed from here. */
+  commit: Schema.String,
+  /** Uncommitted work here was pushed as a WIP commit on top of the branch. */
+  wipCommit: Schema.Boolean,
+  /** `resumed`: the provider session moved too. `history`: the agent there gets the history as context. */
+  context: Schema.Literals(["resumed", "history"]),
+  /** A turn started there. */
+  continued: Schema.Boolean,
+});
+export type ThreadMoveResult = typeof ThreadMoveResult.Type;
+
+export class ThreadMoveError extends Schema.TaggedError<ThreadMoveError>()("ThreadMoveError", {
+  message: Schema.String,
+}) {}

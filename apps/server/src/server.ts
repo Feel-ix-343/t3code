@@ -93,6 +93,7 @@ import * as TerminalManager from "./terminal/Manager.ts";
 import * as McpHttpServer from "./mcp/McpHttpServer.ts";
 import * as PeerForwarding from "./peer/PeerForwarding.ts";
 import * as RemoteDelegation from "./peer/RemoteDelegation.ts";
+import * as ThreadMove from "./peer/ThreadMove.ts";
 import * as PeerClientPairing from "./peer/PeerClientPairing.ts";
 import * as PeerClientPairingHttp from "./peer/http.ts";
 import * as PeerLinkRequests from "./peer/PeerLinkRequests.ts";
@@ -910,6 +911,8 @@ const layerMakeRoutes = Layer.mergeAll(
   ),
   // delegate_task to a linked environment, from /mcp and the follower above.
   Layer.provide(RemoteDelegation.layer.pipe(Layer.provide(ProjectionStoreV2.layer))),
+  // Moving a thread to a linked environment, from clients (WebSocket) and agents (/mcp).
+  Layer.provide(ThreadMove.layer),
   // Links agents ask for: shown in a thread from /mcp, answered over WebSocket.
   Layer.provide(PeerLinkRequests.layer),
   // Share the service so HTTP/WS clients single-flight reads and invalidate each other's cached patches.
