@@ -483,7 +483,6 @@ describe("ThreadInlineFilePreview playback", () => {
             environmentId,
             threadId,
             detailRef: null,
-            threadTitle: "preview",
             workspaceRoot: "/repo",
             feed,
             queuedMessages: [],
@@ -1433,7 +1432,6 @@ describe("ThreadFeed previews", () => {
             environmentId: EnvironmentId.make("environment-1"),
             threadId,
             detailRef: null,
-            threadTitle: "preview",
             workspaceRoot: "/repo",
             feed: [
               {
@@ -1539,7 +1537,6 @@ describe("ThreadFeed previews", () => {
           environmentId,
           threadId,
           detailRef: null,
-          threadTitle: "preview",
           workspaceRoot: "/repo",
           feed: feedFor(threadId),
           queuedMessages: [],

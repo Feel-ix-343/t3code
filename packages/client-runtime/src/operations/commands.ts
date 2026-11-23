@@ -251,11 +251,21 @@ export interface RevertThreadCheckpointInput extends ThreadCommandInput {
 
 export type StopThreadSessionInput = ThreadCommandInput;
 
-export interface ForkThreadFromRunInput extends CommandMetadata {
+export interface ForkThreadInput extends CommandMetadata {
   readonly sourceThreadId: ThreadId;
   readonly targetThreadId: ThreadId;
-  readonly runId: RunId;
+  /** Absent forks the latest stable run. */
+  readonly runId?: RunId;
   readonly title?: string;
+  /** Gives the fork its own worktree from `baseRef` instead of the source's workspace. */
+  readonly newWorktree?: {
+    readonly projectId: ProjectId;
+    readonly baseRef: string;
+    readonly title: string;
+    readonly modelSelection: ModelSelection;
+    readonly runtimeMode: RuntimeMode;
+    readonly interactionMode: ProviderInteractionMode;
+  };
 }
 
 export interface ForkSideChatInput extends CommandMetadata {
@@ -1127,19 +1137,44 @@ export const stopThreadSession = Effect.fn("EnvironmentCommands.stopThreadSessio
   return result;
 });
 
-export const forkThreadFromRun = Effect.fn("EnvironmentCommands.forkThreadFromRun")(function* (
-  input: ForkThreadFromRunInput,
+export const forkThread = Effect.fn("EnvironmentCommands.forkThread")(function* (
+  input: ForkThreadInput,
 ) {
-  return yield* dispatch({
+  const commandId = yield* allocateCommandId(input);
+  const creationSource = input.creationSource ?? "web";
+  const result = yield* dispatch({
     type: "thread.fork",
-    commandId: yield* allocateCommandId(input),
+    commandId,
     createdBy: "user",
-    creationSource: input.creationSource ?? "web",
+    creationSource,
     sourceThreadId: input.sourceThreadId,
     targetThreadId: input.targetThreadId,
-    sourcePoint: { type: "run", runId: input.runId },
+    sourcePoint:
+      input.runId === undefined ? { type: "latest_stable" } : { type: "run", runId: input.runId },
     ...(input.title === undefined ? {} : { title: input.title }),
   });
+  const worktree = input.newWorktree;
+  if (worktree === undefined) return { ...result, worktreeFailure: undefined };
+  // The fork has no runs yet, so it can take a workspace the way an empty thread does. The
+  // fork stands either way, so a failed setup is reported beside it rather than failing it.
+  const setup = yield* Effect.exit(
+    request(ORCHESTRATION_V2_WS_METHODS.launchThread, {
+      commandId: CommandId.make(`${commandId}:worktree`),
+      creationSource,
+      threadId: input.targetThreadId,
+      reuseExistingThread: true,
+      projectId: worktree.projectId,
+      title: worktree.title,
+      modelSelection: worktree.modelSelection,
+      runtimeMode: worktree.runtimeMode,
+      interactionMode: worktree.interactionMode,
+      workspaceStrategy: { type: "worktree", baseRef: worktree.baseRef },
+    }),
+  );
+  return {
+    ...result,
+    worktreeFailure: Exit.isFailure(setup) ? Cause.squash(setup.cause) : undefined,
+  };
 });
 
 /** Forks the thread's latest stable point into a hidden side chat; works while it runs. */

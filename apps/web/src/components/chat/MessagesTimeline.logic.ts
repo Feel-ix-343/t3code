@@ -35,6 +35,7 @@ import {
   workEntryHiddenByToolCallVisibility,
 } from "@t3tools/client-runtime/work-log/presentation";
 import {
+  deriveForkSourceByUserMessageId,
   deriveRevertTurnCountByUserMessageId,
   isStreamingMessageTextUpdate,
   isStreamingTurnItemTextUpdate,
@@ -641,6 +642,8 @@ type MessagesTimelineRowContent =
       assistantCopyStreaming: boolean;
       assistantTurnDiffSummary?: TurnDiffSummary | undefined;
       revertTurnCount?: number | undefined;
+      /** The response a fork from this user message keeps last. */
+      forkSource?: OrchestrationV2ProjectedTurnItem | undefined;
       /** Another of your messages follows directly, so the two sit closer together. */
       groupedWithNext?: boolean;
       /** Another of your messages sits directly above, so the joined corners tighten. */
@@ -1660,6 +1663,7 @@ export function deriveMessagesTimelineRows(
         availableRevertTurnCounts: input.availableRevertTurnCounts,
       })
     : new Map<MessageId, number>();
+  const forkSourceByUserMessageId = deriveForkSourceByUserMessageId(input.timelineEntries);
   const nextRows: MessagesTimelineRow[] = [];
   const terminalAssistantMessageIds = deriveTerminalAssistantMessageIds(timelineEntries);
   const failedRunIds = failedTimelineRunIds(timelineEntries, input.latestRun ?? null);
@@ -2330,6 +2334,10 @@ export function deriveMessagesTimelineRows(
         timelineEntry.message.role === "user"
           ? revertTurnCountByUserMessageId.get(timelineEntry.message.id)
           : undefined,
+      forkSource:
+        timelineEntry.message.role === "user"
+          ? forkSourceByUserMessageId.get(timelineEntry.message.id)
+          : undefined,
     });
   }
 
@@ -2908,6 +2916,7 @@ function isRowUnchanged(a: MessagesTimelineRow, b: MessagesTimelineRow): boolean
         a.assistantCopyStreaming === bm.assistantCopyStreaming &&
         a.assistantTurnDiffSummary === bm.assistantTurnDiffSummary &&
         a.revertTurnCount === bm.revertTurnCount &&
+        a.forkSource === bm.forkSource &&
         a.groupedWithNext === bm.groupedWithNext &&
         a.groupedWithPrevious === bm.groupedWithPrevious &&
         a.continuesSteer === bm.continuesSteer

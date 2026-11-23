@@ -37,6 +37,7 @@ import {
   isBackgroundWorkStopPending,
 } from "@t3tools/client-runtime/state/thread-execution";
 import { useAcknowledgeThreadWoke, useThreadActions } from "../../hooks/useThreadActions";
+import { canForkThreadShell, useForkThread } from "../../hooks/useForkThread";
 import { settleAndAdvance } from "../../settleAndAdvance";
 import type { ChatShortcutCommands } from "./useChatShortcuts";
 import { resolveThreadLastVisitedAt } from "../Sidebar.logic";
@@ -197,6 +198,7 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
   const updateThreadMetadata = useOrchestrationCommand(threadEnvironment.updateMetadata, {
     reportFailure: false,
   });
+  const forkThread = useForkThread();
   const regenerateThreadTitle = useOrchestrationCommand(threadEnvironment.regenerateTitle, {
     reportFailure: false,
   });
@@ -748,6 +750,11 @@ export function useThreadLifecycle(input: ThreadLifecycleInput) {
         const toast = titleRegenerationToast([result]);
         if (toast) toastManager.add(toast);
       });
+    },
+    "thread.fork": () => {
+      if (!readEnvironmentScope(environmentId, AuthOrchestrationOperateScope)) return false;
+      if (!activeThreadShell || !activeThreadRef || !canForkThreadShell(activeThreadShell)) return;
+      void forkThread({ sourceThreadRef: activeThreadRef });
     },
   } satisfies ChatShortcutCommands;
   return {

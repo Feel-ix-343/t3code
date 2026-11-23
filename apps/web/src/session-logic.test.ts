@@ -28,6 +28,7 @@ import {
   deriveCanInterruptRunningThread,
   deriveTimelineEntriesFromVisibleTurnItems,
   deriveTimelineEntriesFromVisibleTurnItemsWithState,
+  deriveForkSourceByUserMessageId,
   deriveRevertTurnCountByUserMessageId,
   derivePhase,
   findRevertCheckpoint,
@@ -266,6 +267,75 @@ describe("V2 session presentation", () => {
 
     expect([...targets]).toEqual([[turnStartMessageId, 0]]);
     expect(targets.has(steerMessageId)).toBe(false);
+  });
+
+  it("forks a user message from the last response before its run, inherited ones included", () => {
+    const sourceThreadId = ThreadId.make("thread-fork-source");
+    const forkThreadId = ThreadId.make("thread-fork");
+    const entry = (
+      id: string,
+      role: "user" | "assistant",
+      run: string,
+      options: {
+        readonly threadId?: ThreadId;
+        readonly status?: "completed" | "streaming";
+        readonly inputIntent?: "turn_start" | "steer";
+      } = {},
+    ): TimelineEntry => {
+      const messageId = MessageId.make(id);
+      const runId = RunId.make(run);
+      const threadId = options.threadId ?? forkThreadId;
+      return {
+        id,
+        kind: "message",
+        createdAt: "2026-06-20T00:00:00.000Z",
+        message: {
+          id: messageId,
+          role,
+          text: id,
+          runId,
+          ...(options.inputIntent ? { inputIntent: options.inputIntent } : {}),
+          streaming: false,
+          createdAt: "2026-06-20T00:00:00.000Z",
+          updatedAt: "2026-06-20T00:00:00.000Z",
+        },
+        projectedItem: {
+          item: {
+            type: role === "user" ? "user_message" : "assistant_message",
+            status: options.status ?? "completed",
+            runId,
+            threadId,
+          },
+          visibility: threadId === forkThreadId ? "local" : "inherited",
+          sourceThreadId: threadId,
+          sourceItemId: id,
+        } as unknown as OrchestrationV2ProjectedTurnItem,
+      };
+    };
+    const sources = deriveForkSourceByUserMessageId([
+      entry("user-1", "user", "run-1", { threadId: sourceThreadId }),
+      entry("reply-1", "assistant", "run-1", { threadId: sourceThreadId }),
+      entry("user-2", "user", "run-2"),
+      entry("reply-2a", "assistant", "run-2"),
+      entry("steer-2", "user", "run-2", { inputIntent: "steer" }),
+      entry("reply-2b", "assistant", "run-2"),
+      entry("user-3", "user", "run-3"),
+      entry("reply-3", "assistant", "run-3", { status: "streaming" }),
+      entry("user-4", "user", "run-4"),
+    ]);
+    const cut = Object.fromEntries(
+      [...sources].map(([id, source]) => [id, [source.sourceThreadId, source.sourceItemId]]),
+    );
+
+    expect(cut).toEqual({
+      // The first message of the fork's own history forks its source thread.
+      "user-2": [sourceThreadId, "reply-1"],
+      // A steer belongs to the run it steered, so the fork ends before that run.
+      "steer-2": [sourceThreadId, "reply-1"],
+      "user-3": [forkThreadId, "reply-2b"],
+      // An unfinished response is not a stable point to fork from.
+      "user-4": [forkThreadId, "reply-2b"],
+    });
   });
 
   describe("revert targets after a rewind", () => {

@@ -161,6 +161,52 @@ export async function startFanoutThread(input: {
 }
 
 /**
+ * Puts `message`'s text, mentions and attachments (`files`, prepared by
+ * `prepareRevertedMessageAttachments`) into the composer draft, after any prompt
+ * already there. Returns the resulting prompt.
+ */
+export function restoreMessageToComposer(
+  draftTarget: ComposerThreadTarget,
+  message: ChatMessage,
+  files: ReadonlyArray<File>,
+): string {
+  const store = useComposerDraftStore.getState();
+  const currentPrompt = store.getComposerDraft(draftTarget)?.prompt ?? "";
+  const { prompt: restoredPrompt, mentions } = recallComposerMessage(message);
+  const nextPrompt =
+    restoredPrompt.length === 0
+      ? currentPrompt
+      : currentPrompt.length > 0
+        ? `${currentPrompt}\n\n${restoredPrompt}`
+        : restoredPrompt;
+  store.setPrompt(draftTarget, nextPrompt);
+  // The restored prompt already carries the chips; these add only their records.
+  store.addThreadContexts(draftTarget, mentions.threadContexts, { appendReference: false });
+  store.addEnvironmentContexts(draftTarget, mentions.environmentContexts, {
+    appendReference: false,
+  });
+  const images: ComposerImageAttachment[] = [];
+  const restoredFiles: ComposerFileAttachment[] = [];
+  files.forEach((file, index) => {
+    const attachment = {
+      id: randomUUID(),
+      name: file.name,
+      mimeType: file.type,
+      sizeBytes: file.size,
+      file,
+    };
+    if (message.attachments?.[index]?.type === "image") {
+      images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
+    } else {
+      restoredFiles.push({ ...attachment, type: "file" });
+    }
+  });
+  store.addImages(draftTarget, images, { allowDuplicates: true });
+  store.addFiles(draftTarget, restoredFiles, { allowDuplicates: true });
+  return nextPrompt;
+}
+
+/**
  * Reverts the thread to before `message` and puts that message's text, mentions
  * and attachments back in the composer draft. Returns the restored prompt, or the
  * error to show; on error the draft is untouched.
@@ -249,38 +295,7 @@ export async function rewindToMessage(input: {
         ),
       });
     }
-    const currentPrompt = store.getComposerDraft(draftTarget)?.prompt ?? "";
-    const { prompt: restoredPrompt, mentions } = recallComposerMessage(message);
-    const nextPrompt =
-      restoredPrompt.length === 0
-        ? currentPrompt
-        : currentPrompt.length > 0
-          ? `${currentPrompt}\n\n${restoredPrompt}`
-          : restoredPrompt;
-    store.setPrompt(draftTarget, nextPrompt);
-    // The restored prompt already carries the chips; these add only their records.
-    store.addThreadContexts(draftTarget, mentions.threadContexts, { appendReference: false });
-    store.addEnvironmentContexts(draftTarget, mentions.environmentContexts, {
-      appendReference: false,
-    });
-    const images: ComposerImageAttachment[] = [];
-    const restoredFiles: ComposerFileAttachment[] = [];
-    files.forEach((file, index) => {
-      const attachment = {
-        id: randomUUID(),
-        name: file.name,
-        mimeType: file.type,
-        sizeBytes: file.size,
-        file,
-      };
-      if (message.attachments?.[index]?.type === "image") {
-        images.push({ ...attachment, type: "image", previewUrl: URL.createObjectURL(file) });
-      } else {
-        restoredFiles.push({ ...attachment, type: "file" });
-      }
-    });
-    store.addImages(draftTarget, images, { allowDuplicates: true });
-    store.addFiles(draftTarget, restoredFiles, { allowDuplicates: true });
+    const nextPrompt = restoreMessageToComposer(draftTarget, message, files);
     return { error: null, prompt: nextPrompt };
   } catch (error) {
     return {

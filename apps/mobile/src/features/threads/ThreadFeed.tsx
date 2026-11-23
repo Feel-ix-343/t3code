@@ -373,7 +373,6 @@ export interface ThreadFeedProps {
   readonly threadId: ThreadId;
   /** Null while the thread's creation is queued: reading detail then caches a not-found as deleted. */
   readonly detailRef: ScopedThreadRef | null;
-  readonly threadTitle: string;
   readonly workspaceRoot?: string | null;
   readonly feed: ReadonlyArray<ThreadFeedEntry>;
   readonly pendingHandoff?: HandoffEndpoints | null;
@@ -451,7 +450,6 @@ function AssistantForkButton(props: {
   readonly buttonSize: number;
   readonly iconSize: number;
   readonly projectedItem: OrchestrationV2ProjectedTurnItem;
-  readonly sourceTitle: string;
 }) {
   const support = useV2ItemSupport({
     environmentId: props.environmentId,
@@ -459,7 +457,7 @@ function AssistantForkButton(props: {
     sourceItemId: props.projectedItem.sourceItemId,
   });
   const gt = useGT();
-  const forkFromRun = useAtomCommand(threadEnvironment.forkFromRun, "fork from response");
+  const forkThread = useAtomCommand(threadEnvironment.fork, "fork from response");
   const selectDetail = useSelectWorkspaceDetail();
   const [busy, setBusy] = useState(false);
   const canFork = canForkProjectedAssistantItem({
@@ -479,13 +477,12 @@ function AssistantForkButton(props: {
         const targetThreadId = ThreadId.make(uuidv4());
         setBusy(true);
         void Haptics.selectionAsync();
-        void forkFromRun({
+        void forkThread({
           environmentId: props.environmentId,
           input: {
             sourceThreadId: props.projectedItem.sourceThreadId,
             targetThreadId,
             runId,
-            title: `${props.sourceTitle} fork`,
             creationSource: "mobile",
           },
         })
@@ -2018,7 +2015,6 @@ function renderFeedEntry(
     readonly userBubbleMaxWidth: number;
     readonly markdownContentWidth: number;
     readonly contentWidth: number;
-    readonly threadTitle: string;
     readonly workflowOpening: WorkflowOpening | null;
     readonly userMessageGrouping: GroupedThreadFeedRow["userMessageGrouping"];
     readonly m: ReturnType<typeof useMessages>;
@@ -2721,7 +2717,6 @@ function renderFeedEntry(
                 buttonSize={props.replyActionSize.button}
                 iconSize={props.replyActionSize.icon}
                 projectedItem={message.projectedItem}
-                sourceTitle={props.threadTitle}
               />
             ) : null}
             <Text className="font-t3-medium text-xs tabular-nums text-foreground-secondary">
@@ -4336,7 +4331,6 @@ export const ThreadFeed = memo(function ThreadFeed(props: ThreadFeedProps) {
             userBubbleMaxWidth,
             markdownContentWidth,
             contentWidth,
-            threadTitle: props.threadTitle,
             skills: props.skills,
             workspaceRoot: props.workspaceRoot,
             workflowOpening,
