@@ -1811,10 +1811,11 @@ it.effect(
   },
 );
 
-it.effect("MCP nest and unnest set a thread's placement, and a move unnests it", () => {
+it.effect("MCP nest and unnest set a thread's placement, and a move away unnests it", () => {
   const dispatched: Array<OrchestrationV2ServerCommand> = [];
   const pinnedAt = DateTime.makeUnsafe("2026-11-10T00:00:00.000Z");
   const parentId = ThreadId.make("spawner");
+  let spawnedSection: string | null = null;
   return Effect.gen(function* () {
     const server = yield* McpServer.McpServer;
     const call = (args: Record<string, unknown>) =>
@@ -1835,13 +1836,26 @@ it.effect("MCP nest and unnest set a thread's placement, and a move unnests it",
       expect.objectContaining({ type: "thread.nest.set", parentThreadId: null }),
     ]);
 
+    // Into its parent's section, it stays nested.
     dispatched.length = 0;
     expect((yield* call({ action: "move", sectionId: "work" })).isError).toBe(false);
-    expect(dispatched).toEqual([
+    expect(dispatched).toContainEqual(
       expect.objectContaining({
         type: "thread.pin.reorder",
         threadId: "spawned",
         sectionId: "work",
+      }),
+    );
+    expect(dispatched.some((command) => command.type === "thread.nest.set")).toBe(false);
+
+    // Into another list, it no longer sits under its parent.
+    dispatched.length = 0;
+    expect((yield* call({ action: "move", sectionId: "other" })).isError).toBe(false);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        type: "thread.pin.reorder",
+        threadId: "spawned",
+        sectionId: "other",
       }),
       expect.objectContaining({
         type: "thread.nest.set",
@@ -1851,6 +1865,7 @@ it.effect("MCP nest and unnest set a thread's placement, and a move unnests it",
     ]);
 
     dispatched.length = 0;
+
     expect((yield* call({ action: "unnest", sectionId: null })).isError).toBe(false);
     expect(dispatched.map((command) => command.type)).toEqual([
       "thread.pin.reorder",
@@ -1858,7 +1873,12 @@ it.effect("MCP nest and unnest set a thread's placement, and a move unnests it",
     ]);
   }).pipe(
     Effect.provide(
-      threadToolkitWithSettings({ sidebarSections: [{ id: "work", title: "Work" }] }).pipe(
+      threadToolkitWithSettings({
+        sidebarSections: [
+          { id: "work", title: "Work" },
+          { id: "other", title: "Other" },
+        ],
+      }).pipe(
         Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
         Layer.provide(NodeCrypto.layer),
         Layer.provide(
@@ -1875,7 +1895,7 @@ it.effect("MCP nest and unnest set a thread's placement, and a move unnests it",
                   ...projection.thread,
                   pinnedAt,
                   pinOrderKey: "m",
-                  pinSectionId: null,
+                  pinSectionId: spawnedSection,
                   lineage: { ...projection.thread.lineage, spawnedBy: parentId },
                 },
               });
@@ -1886,12 +1906,25 @@ it.effect("MCP nest and unnest set a thread's placement, and a move unnests it",
                   ...McpToolAccessTestkit.liveThreadShell(ThreadId.make("spawned")),
                   pinnedAt,
                   pinOrderKey: "m",
-                  pinSectionId: null,
+                  pinSectionId: spawnedSection,
+                  mayBeLive: false,
+                  hasRemoteTasks: false,
+                },
+                {
+                  ...McpToolAccessTestkit.liveThreadShell(parentId),
+                  pinnedAt,
+                  pinOrderKey: "a",
+                  pinSectionId: "work",
                   mayBeLive: false,
                   hasRemoteTasks: false,
                 },
               ]),
             dispatch: (command) => {
+              if (
+                (command.type === "thread.pin.reorder" || command.type === "thread.pin") &&
+                command.threadId === "spawned"
+              )
+                spawnedSection = command.sectionId ?? null;
               dispatched.push(command);
               return Effect.succeed({ sequence: dispatched.length, storedEvents: [] });
             },
@@ -1910,8 +1943,18 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
   const claudeThread = (
     session: string,
     pin?: { readonly key: string; readonly section: string | null },
+    lineage?: Record<string, unknown>,
   ) => ({
     ...McpToolAccessTestkit.liveThreadShell(ThreadId.make(`import:claudeAgent:${session}`)),
+    ...(lineage === undefined
+      ? {}
+      : {
+          lineage: {
+            ...McpToolAccessTestkit.liveThreadShell(ThreadId.make(`import:claudeAgent:${session}`))
+              .lineage,
+            ...lineage,
+          },
+        }),
     pinnedAt: pin === undefined ? null : pinnedAt,
     pinOrderKey: pin?.key ?? null,
     pinSectionId: pin?.section ?? null,
@@ -1946,6 +1989,19 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
         { threadId: "import:claudeAgent:legal", from: null, to: "Legal" },
       ],
       pinned: [{ threadId: "import:claudeAgent:starred" }],
+      // A child follows its parent into the parent's section, and its own child follows it.
+      keptWithParent: [
+        {
+          threadId: "import:claudeAgent:child",
+          parentThreadId: "import:claudeAgent:in-fin",
+          to: "FinSearch",
+        },
+        {
+          threadId: "import:claudeAgent:grandchild",
+          parentThreadId: "import:claudeAgent:child",
+          to: "FinSearch",
+        },
+      ],
       claudeDesktop: { sections: 2, assignedSessions: 5, starredSessions: 2 },
     };
     expect(dry.structuredContent).toMatchObject({ dryRun: true, ...expected });
@@ -1979,7 +2035,19 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
         threadId: "import:claudeAgent:starred",
         sectionId: null,
       }),
+      expect.objectContaining({
+        type: "thread.pin",
+        threadId: "import:claudeAgent:child",
+        sectionId: "fin",
+      }),
+      expect.objectContaining({
+        type: "thread.pin",
+        threadId: "import:claudeAgent:grandchild",
+        sectionId: "fin",
+      }),
     ]);
+    // Nesting stays: the sync never unnests what it places.
+    expect(dispatched.some((command) => command.type === "thread.nest.set")).toBe(false);
   }).pipe(
     Effect.provide(
       threadToolkitWithSettings(
@@ -2054,6 +2122,15 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
                   claudeThread("in-mine", { key: "b", section: "mine" }),
                   claudeThread("legal"),
                   claudeThread("starred"),
+                  claudeThread("grandchild", undefined, {
+                    spawnedBy: "import:claudeAgent:child",
+                  }),
+                  claudeThread("child", undefined, { spawnedBy: "import:claudeAgent:in-fin" }),
+                  // Unnested by the user, so it stays in its folder.
+                  claudeThread("detached", undefined, {
+                    spawnedBy: "import:claudeAgent:in-fin",
+                    nestParentThreadId: null,
+                  }),
                   // Not a Claude import, so the sync leaves it alone.
                   McpToolAccessTestkit.liveThreadShell(ThreadId.make("native")),
                 ].map((entry) => ({ mayBeLive: false, hasRemoteTasks: false, ...entry })),

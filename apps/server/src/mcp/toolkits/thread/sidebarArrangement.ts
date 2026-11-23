@@ -39,6 +39,21 @@ export function effectivePinSection(
     : null;
 }
 
+/** The sidebar list a thread shows in: its pin section, plain Pinned, or its project folder. */
+export function sidebarListKey(
+  thread: Pick<
+    ActiveShellIndexEntry,
+    "projectId" | "pinnedAt" | "pinSectionId" | "settledOverride" | "snoozedUntil"
+  >,
+  sections: ReadonlyArray<SidebarSection>,
+): string {
+  if (thread.pinnedAt != null)
+    return `pinned:${effectivePinSection(thread.pinSectionId, sections) ?? ""}`;
+  if (thread.settledOverride === "settled") return "settled";
+  if (thread.snoozedUntil != null) return "snoozed";
+  return `folder:${thread.projectId}`;
+}
+
 /** The pins of one list in sidebar order: keyed by key, then keyless ones. */
 export function pinnedListOrder(
   index: ReadonlyArray<PinnedEntry>,

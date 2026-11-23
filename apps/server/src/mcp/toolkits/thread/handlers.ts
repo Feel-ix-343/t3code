@@ -36,6 +36,7 @@ import {
   pinnedListOrder,
   planFolderMove,
   planPinnedMove,
+  sidebarListKey,
 } from "./sidebarArrangement.ts";
 import { syncClaudeSessions } from "./claudeSessionSync.ts";
 import { ThreadToolkit } from "./tools.ts";
@@ -515,9 +516,17 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           sequence = result.sequence;
         }
         if (sequence === undefined) return yield* unavailable();
-        // A nested thread moved elsewhere no longer sits under its parent.
-        if (input.action === "unnest" || threadNestParentId(thread.lineage) !== null) {
-          return yield* setNestParent(null);
+        if (input.action === "unnest") return yield* setNestParent(null);
+        // A nested thread moved into another list than its parent's no longer sits under it.
+        const parentId = threadNestParentId(thread.lineage);
+        if (parentId !== null) {
+          const index = yield* threads.listActiveShellIndex().pipe(Effect.mapError(unavailable));
+          const listOf = (id: ThreadId) => {
+            const entry = index.find((candidate) => candidate.id === id);
+            return entry === undefined ? null : sidebarListKey(entry, sections);
+          };
+          const moved = listOf(thread.id);
+          if (moved === null || moved !== listOf(parentId)) return yield* setNestParent(null);
         }
         return { sequence };
       }

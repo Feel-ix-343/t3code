@@ -1,10 +1,12 @@
 import {
   isListedThreadLineage,
   OrchestratorMcpFailure,
+  threadNestParentId,
   type ProjectId,
   ThreadId,
 } from "@t3tools/contracts";
 import type { SidebarSection } from "@t3tools/contracts/settings";
+import * as DateTime from "effect/DateTime";
 import * as Effect from "effect/Effect";
 import * as Option from "effect/Option";
 import * as SecureRandom from "effect/crypto/SecureRandom";
@@ -120,6 +122,59 @@ export function planClaudeOrganization(input: {
   return { createSections, placements, pins };
 }
 
+type FollowerThread = Pick<
+  ActiveShellIndexEntry,
+  "id" | "lineage" | "pinnedAt" | "pinSectionId" | "settledOverride"
+>;
+
+/**
+ * A nested thread shows under its parent only in the same list, so each child whose parent is
+ * pinned into a section it is not in joins that section, deepest last so grandchildren follow.
+ * Side chats, settled threads, threads the user unnested, and threads the desktop app assigns a
+ * section of its own stay put. `threads` is the sidebar after the organization plan.
+ */
+function planNestedFollowers(input: {
+  readonly threads: ReadonlyArray<FollowerThread>;
+  /** The threads the sync may move. */
+  readonly candidateIds: ReadonlySet<ThreadId>;
+  /** Threads the desktop app places in a section itself. */
+  readonly assignedIds: ReadonlySet<ThreadId>;
+  readonly sections: ReadonlyArray<SidebarSection>;
+}): ReadonlyArray<{ threadId: ThreadId; parentThreadId: ThreadId; sectionId: string }> {
+  const sectionOf = new Map<ThreadId, string | null>();
+  const byId = new Map(input.threads.map((thread) => [thread.id, thread] as const));
+  for (const thread of input.threads) {
+    sectionOf.set(
+      thread.id,
+      thread.pinnedAt == null ? null : effectivePinSection(thread.pinSectionId, input.sections),
+    );
+  }
+  const followers: Array<{ threadId: ThreadId; parentThreadId: ThreadId; sectionId: string }> = [];
+  // Each pass settles one more generation; a cycle stops when nothing changes.
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const thread of input.threads) {
+      if (
+        !input.candidateIds.has(thread.id) ||
+        input.assignedIds.has(thread.id) ||
+        !isListedThreadLineage(thread.lineage) ||
+        thread.settledOverride === "settled"
+      )
+        continue;
+      const parentId = threadNestParentId(thread.lineage);
+      if (parentId === null || parentId === thread.id || !byId.has(parentId)) continue;
+      const sectionId = sectionOf.get(parentId) ?? null;
+      if (sectionId === null || sectionOf.get(thread.id) === sectionId) continue;
+      sectionOf.set(thread.id, sectionId);
+      const existing = followers.findIndex((follower) => follower.threadId === thread.id);
+      if (existing !== -1) followers.splice(existing, 1);
+      followers.push({ threadId: thread.id, parentThreadId: parentId, sectionId });
+      changed = true;
+    }
+  }
+  return followers;
+}
+
 export interface ClaudeSessionSyncInput {
   readonly projectId?: ProjectId | undefined;
   readonly dryRun?: boolean | undefined;
@@ -211,18 +266,13 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
     Effect.mapError(unavailable),
   );
   const projectIds = new Set<string>(projects.map((project) => project.id));
-  const readScope = threads.listActiveShellIndex().pipe(
-    Effect.mapError(unavailable),
-    Effect.map((index) =>
-      index.filter(
-        (entry) =>
-          projectIds.has(entry.projectId) &&
-          isListedThreadLineage(entry.lineage) &&
-          importedClaudeSessionId(entry.id) !== null,
-      ),
-    ),
+  const fullIndex = yield* threads.listActiveShellIndex().pipe(Effect.mapError(unavailable));
+  const scope = fullIndex.filter(
+    (entry) =>
+      projectIds.has(entry.projectId) &&
+      isListedThreadLineage(entry.lineage) &&
+      importedClaudeSessionId(entry.id) !== null,
   );
-  const scope = yield* readScope;
   // A dry run has not created its new threads; they would arrive unpinned.
   const planned = dryRun
     ? [
@@ -243,6 +293,50 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
   let sectionIdByTitle = new Map(
     sections.map((section) => [sectionKey(section.title), section.id]),
   );
+  // Sections the plan creates get stand-in ids until they exist.
+  const plannedSections: SidebarSection[] = [
+    ...sections,
+    ...plan.createSections.map((title) => ({ id: `planned:${sectionKey(title)}`, title })),
+  ];
+  const plannedSectionId = (title: string) =>
+    plannedSections.find((section) => sectionKey(section.title) === sectionKey(title))?.id ?? null;
+  const pinnedNow = DateTime.makeUnsafe(0);
+  const afterPlan = new Map<ThreadId, FollowerThread>(
+    fullIndex.map((entry) => [entry.id, entry] as const),
+  );
+  for (const placement of plan.placements) {
+    const entry = afterPlan.get(placement.threadId);
+    if (entry !== undefined)
+      afterPlan.set(entry.id, {
+        ...entry,
+        pinnedAt: entry.pinnedAt ?? pinnedNow,
+        pinSectionId: plannedSectionId(placement.sectionTitle),
+      });
+  }
+  for (const threadId of plan.pins) {
+    const entry = afterPlan.get(threadId);
+    if (entry !== undefined)
+      afterPlan.set(entry.id, {
+        ...entry,
+        pinnedAt: entry.pinnedAt ?? pinnedNow,
+        pinSectionId: null,
+      });
+  }
+  const sessionIdsAssigned = new Set(organization.sectionBySession.keys());
+  const followers =
+    input.applySections === false
+      ? []
+      : planNestedFollowers({
+          threads: [...afterPlan.values()],
+          candidateIds: new Set(scope.map((entry) => entry.id)),
+          assignedIds: new Set(
+            scope.flatMap((entry) => {
+              const sessionId = importedClaudeSessionId(entry.id);
+              return sessionId !== null && sessionIdsAssigned.has(sessionId) ? [entry.id] : [];
+            }),
+          ),
+          sections: plannedSections,
+        });
   if (!dryRun) {
     if (plan.createSections.length > 0) {
       const random = yield* SecureRandom.SecureRandom;
@@ -292,10 +386,19 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
       if (sectionId !== undefined) yield* place(placement.threadId, sectionId);
     }
     for (const threadId of plan.pins) yield* place(threadId, null);
+    for (const follower of followers) {
+      const title = plannedSections.find((section) => section.id === follower.sectionId)?.title;
+      const sectionId = title === undefined ? undefined : sectionIdByTitle.get(sectionKey(title));
+      if (sectionId !== undefined) yield* place(follower.threadId, sectionId);
+    }
   }
 
   const titles = yield* threads
-    .getThreadTitles([...plan.placements.map((placement) => placement.threadId), ...plan.pins])
+    .getThreadTitles([
+      ...plan.placements.map((placement) => placement.threadId),
+      ...plan.pins,
+      ...followers.map((follower) => follower.threadId),
+    ])
     .pipe(Effect.orElseSucceed((): Record<ThreadId, string> => ({})));
   const titled = (threadId: ThreadId) => ({
     threadId,
@@ -327,6 +430,11 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
       to: placement.sectionTitle,
     })),
     pinned: plan.pins.map(titled),
+    keptWithParent: followers.map((follower) => ({
+      ...titled(follower.threadId),
+      parentThreadId: follower.parentThreadId,
+      to: plannedSections.find((section) => section.id === follower.sectionId)?.title ?? "",
+    })),
     claudeDesktop: {
       sections: organization.sections.length,
       assignedSessions: organization.sectionBySession.size,
