@@ -12,6 +12,7 @@ import {
   MessageId,
   ProjectId,
   ProviderDriverKind,
+  type RunId,
   ThreadId,
   TurnItemId,
   type AgentSessionImportInput,
@@ -242,7 +243,7 @@ export interface AgentSessionImportReport {
   readonly skippedCount: number;
 }
 
-type HistoryMessage = Omit<AgentSessionScanner.AgentSessionThreadMessage, "role"> & {
+export type HistoryMessage = Omit<AgentSessionScanner.AgentSessionThreadMessage, "role"> & {
   readonly role: AgentSessionScanner.AgentSessionThreadMessage["role"] | "reasoning";
 };
 
@@ -839,52 +840,103 @@ const make = Effect.gen(function* () {
     } satisfies AgentSessionImportResult;
   });
 
+  const pendingHistoryThread = (threadId: ThreadId) =>
+    Effect.map(orchestrator.getThreadRecords(threadId, ["providerThreads", "runs"]), (records) =>
+      isNativeHistoryPending({
+        historyOrigin: records.thread.historyOrigin,
+        hasRun: records.runs.length > 0,
+      })
+        ? records
+        : null,
+    );
+
+  /**
+   * Writes `messages` into a thread with no runs as run-less history. The `v1_import` origin
+   * keeps it in forks and marks the import done, so a later call does nothing.
+   */
+  const importHistory = Effect.fn("importHistoryV2")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly messages: ReadonlyArray<HistoryMessage>;
+  }) {
+    // Thread commands write whole thread rows, so hold their lock from the
+    // re-read through the write to keep both this marker and their changes.
+    return yield* threadCommands.withLock(
+      input.threadId,
+      Effect.gen(function* () {
+        const current = yield* pendingHistoryThread(input.threadId);
+        if (current === null) return 0;
+        yield* eventSink.write({
+          events: [
+            ...input.messages.flatMap((message, index) =>
+              messageEvents({ threadId: input.threadId, index, message }),
+            ),
+            {
+              id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${input.threadId}:native-history`),
+              type: "thread.metadata-updated",
+              threadId: input.threadId,
+              providerInstanceId: current.thread.providerInstanceId,
+              occurredAt: yield* DateTime.now,
+              payload: { ...current.thread, historyOrigin: "v1_import" },
+            },
+          ],
+        });
+        return input.messages.length;
+      }),
+    );
+  });
+
+  /** Appends a completed notice to a thread's timeline, after its latest run's items. */
+  const writeNotice = Effect.fn("writeNoticeV2")(function* (input: {
+    readonly threadId: ThreadId;
+    readonly runId: RunId | null;
+    readonly key: string;
+    readonly title: string;
+    readonly message: string;
+  }) {
+    const now = yield* DateTime.now;
+    const id = `${input.key}:notice:${input.threadId}`;
+    yield* eventSink.write({
+      events: [
+        {
+          id: EventId.make(id),
+          type: "turn-item.updated",
+          threadId: input.threadId,
+          ...(input.runId === null ? {} : { runId: input.runId }),
+          occurredAt: now,
+          payload: {
+            id: TurnItemId.make(id),
+            threadId: input.threadId,
+            runId: input.runId,
+            nodeId: null,
+            providerThreadId: null,
+            providerTurnId: null,
+            nativeItemRef: null,
+            parentItemId: null,
+            // EventSink allocates the real position, after the existing items.
+            ordinal: 0,
+            status: "completed",
+            title: input.title,
+            startedAt: now,
+            completedAt: now,
+            updatedAt: now,
+            type: "system_notice",
+            message: input.message,
+          },
+        },
+      ],
+    });
+  });
+
   /**
    * Loading a native session replays its history only into the adapter's own
-   * snapshot, so copy that snapshot into the thread as run-less history. The
-   * `v1_import` origin keeps it in forks and marks the import done, so a call
+   * snapshot, so copy that snapshot into the thread as run-less history. A call
    * after a failed read repairs the thread and any later call does nothing.
    */
   const importNativeHistory = Effect.fn("importNativeHistoryV2")(function* (input: {
     readonly threadId: ThreadId;
     readonly workspaceRoot: string;
   }) {
-    const pendingThread = Effect.map(
-      orchestrator.getThreadRecords(input.threadId, ["providerThreads", "runs"]),
-      (records) =>
-        isNativeHistoryPending({
-          historyOrigin: records.thread.historyOrigin,
-          hasRun: records.runs.length > 0,
-        })
-          ? records
-          : null,
-    );
-    // Thread commands write whole thread rows, so hold their lock from the
-    // re-read through the write to keep both this marker and their changes.
-    const commit = (messages: ReadonlyArray<HistoryMessage>) =>
-      threadCommands.withLock(
-        input.threadId,
-        Effect.gen(function* () {
-          const current = yield* pendingThread;
-          if (current === null) return 0;
-          yield* eventSink.write({
-            events: [
-              ...messages.flatMap((message, index) =>
-                messageEvents({ threadId: input.threadId, index, message }),
-              ),
-              {
-                id: EventId.make(`${IMPORT_EVENT_PREFIX}:thread:${input.threadId}:native-history`),
-                type: "thread.metadata-updated",
-                threadId: input.threadId,
-                providerInstanceId: current.thread.providerInstanceId,
-                occurredAt: yield* DateTime.now,
-                payload: { ...current.thread, historyOrigin: "v1_import" },
-              },
-            ],
-          });
-          return messages.length;
-        }),
-      );
+    const pendingThread = pendingHistoryThread(input.threadId);
     const records = yield* pendingThread;
     if (records === null) return 0;
     const { thread, providerThreads } = records;
@@ -934,10 +986,16 @@ const make = Effect.gen(function* () {
         : [],
     );
     // Loading the session can take a while, and the thread is usable meanwhile.
-    return yield* commit(messages);
+    return yield* importHistory({ threadId: input.threadId, messages });
   });
 
-  return { importAgentThreads, importRecentAgentThreads, importNativeHistory };
+  return {
+    importAgentThreads,
+    importRecentAgentThreads,
+    importNativeHistory,
+    importHistory,
+    writeNotice,
+  };
 });
 
 type AgentSessionImporterShape = Effect.Success<typeof make>;

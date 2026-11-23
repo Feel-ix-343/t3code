@@ -557,6 +557,24 @@ any other thread on web and desktop, and a shorter read-only list on mobile.
   Linked environments must be on there. Both machines need a version of T3 Code
   that has this view.
 
+### Move a thread to a linked machine
+
+To let a thread keep going on another machine, such as a server that stays up when
+your laptop sleeps, right-click it and choose **Move to environment**, or use
+**Move thread to environment** in the command palette. Agents can do the same
+with `t3_thread_transfer`.
+
+- The thread's branch, with any uncommitted changes as a WIP commit on top, is
+  pushed to the repository's remote. Your checkout here is left as it is. A
+  thread on the default branch is pushed to a new `t3/moved-…` branch instead.
+- The other machine needs a project for the same repository and access to that
+  remote. It checks the work out in a new worktree and continues the thread
+  there with its history. A Claude Code thread resumes its own session there.
+- Only after the other machine takes the thread does a running turn here stop.
+  The thread here is then settled, with a note linking to the new one.
+- If the push is refused, for example because the branch moved on the remote,
+  nothing moves.
+
 ## Manage or revoke access
 
 On the host, **Settings → Sharing & access** lets authorized administrators create

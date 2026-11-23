@@ -213,6 +213,13 @@ export const hiddenWithoutBackgroundWait = (): boolean => {
   );
 };
 
+/** `McpSchema.EnabledWhen` for tools only another environment's peer link calls. */
+export const shownToLinkedClients = (): boolean => {
+  const fiber = Fiber.getCurrent();
+  const scope = fiber && Context.getOrUndefined(fiber.context, McpInvocationContext);
+  return scope?.client?.linked === true;
+};
+
 /** `McpSchema.EnabledWhen` for tools that only serve links, hidden while the beta is off. */
 export const hiddenWhileLinksOff = (): boolean => {
   const fiber = Fiber.getCurrent();

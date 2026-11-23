@@ -20,6 +20,7 @@ import {
   RunId,
   NonNegativeInt,
   ProjectId,
+  ThreadMoveResult,
   clampedPositiveInt,
 } from "@t3tools/contracts";
 import { SidebarSections, SidebarSectionTitle } from "@t3tools/contracts/settings";
@@ -35,6 +36,8 @@ import * as ServerSettings from "../../../serverSettings.ts";
 import * as AgentSessionImporter from "../../../project/AgentSessionImporter.ts";
 import * as AgentSessionScanner from "../../../project/AgentSessionScanner.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
+import * as ThreadMove from "../../../peer/ThreadMove.ts";
+import { ThreadReceiveInput, ThreadReceiveResult } from "../../../peer/threadMovePlan.ts";
 
 const ThreadOrganizeTool = Tool.make("t3_thread_organize", {
   description:
@@ -279,14 +282,16 @@ const ThreadConfigureTool = Tool.make("t3_thread_configure", {
 const ThreadTransferTool = Tool.make("t3_thread_transfer", {
   ...commandTool,
   description:
-    "Move context between threads. Omit `threadId` for this thread. fork: copy it from `sourcePoint` (default latest stable run) into a new thread with the same setup; no turn runs yet. merge_back: merge it from `sourcePoint` into a related `targetThreadId` in the same project. status: its context transfers.",
+    "Move context between threads. Omit `threadId` for this thread. fork: copy it from `sourcePoint` (default latest stable run) into a new thread with the same setup; no turn runs yet. merge_back: merge it from `sourcePoint` into a related `targetThreadId` in the same project. status: its context transfers. move: on user request, continue it in linked environment `toEnvironmentId` (`toProjectId`, default same repository); pushes its branch and uncommitted work, then settles it here.",
   parameters: Schema.Struct({
-    action: Schema.Literals(["fork", "merge_back", "status"]),
+    action: Schema.Literals(["fork", "merge_back", "status", "move"]),
     environmentId: OrchestratorMcpEnvironmentTarget,
     threadId: Schema.optional(ThreadId),
     sourcePoint: Schema.optional(OrchestrationV2ThreadForkSourcePoint),
     targetThreadId: Schema.optional(ThreadId),
     title: Schema.optional(TrimmedNonEmptyString),
+    toEnvironmentId: Schema.optional(EnvironmentId),
+    toProjectId: Schema.optional(ProjectId),
   }),
   success: Schema.Union([
     Schema.Struct({ sequence: NonNegativeInt, targetThreadId: ThreadId }),
@@ -300,8 +305,21 @@ const ThreadTransferTool = Tool.make("t3_thread_transfer", {
         }),
       ),
     }),
+    Schema.Struct({ ...ThreadMoveResult.fields, link: Schema.String }),
   ]),
+  dependencies: [...commandTool.dependencies, ThreadMove.ThreadMove],
 }).annotate(Tool.Destructive, true);
+
+/** The receiving end of a move from a linked environment; agents never see it. */
+const ThreadReceiveTool = Tool.make("t3_thread_receive", {
+  ...commandTool,
+  description: "Take a thread a linked environment moves here.",
+  parameters: ThreadReceiveInput,
+  success: ThreadReceiveResult,
+  dependencies: [...commandTool.dependencies, ThreadMove.ThreadMove],
+})
+  .annotate(Tool.Destructive, true)
+  .annotate(McpSchema.EnabledWhen, McpInvocationContext.shownToLinkedClients);
 
 const ThreadSearchTool = Tool.make("t3_thread_search", {
   ...commandTool,
@@ -371,6 +389,7 @@ export const ThreadToolkit = Toolkit.make(
   ThreadSearchTool,
   ThreadConfigureTool,
   ThreadTransferTool,
+  ThreadReceiveTool,
   ThreadOrganizeTool,
   SidebarSectionTool,
   ClaudeSessionsSyncTool,
