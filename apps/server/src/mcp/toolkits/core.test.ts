@@ -1848,6 +1848,22 @@ it.effect("MCP nest and unnest set a thread's placement, and a move away unnests
     );
     expect(dispatched.some((command) => command.type === "thread.nest.set")).toBe(false);
 
+    // Before a sibling it is reordered among its siblings and stays nested.
+    dispatched.length = 0;
+    expect((yield* call({ action: "move", beforeThreadId: "sibling" })).isError).toBe(false);
+    expect(dispatched).toEqual([
+      expect.objectContaining({ type: "thread.pin.reorder", threadId: "spawned" }),
+    ]);
+    const siblingKey = (dispatched[0] as { orderKey: string }).orderKey;
+    expect(siblingKey > "c" && siblingKey < "k").toBe(true);
+
+    // Above its parent it leaves the parent's group.
+    dispatched.length = 0;
+    expect((yield* call({ action: "move", beforeThreadId: "spawner" })).isError).toBe(false);
+    expect(dispatched.at(-1)).toEqual(
+      expect.objectContaining({ type: "thread.nest.set", parentThreadId: null }),
+    );
+
     // Into another list, it no longer sits under its parent.
     dispatched.length = 0;
     expect((yield* call({ action: "move", sectionId: "other" })).isError).toBe(false);
@@ -1936,7 +1952,19 @@ it.effect("MCP nest and unnest set a thread's placement, and a move away unnests
                 {
                   ...McpToolAccessTestkit.liveThreadShell(parentId),
                   pinnedAt,
-                  pinOrderKey: "a",
+                  pinOrderKey: "c",
+                  pinSectionId: "work",
+                  mayBeLive: false,
+                  hasRemoteTasks: false,
+                },
+                {
+                  ...McpToolAccessTestkit.liveThreadShell(ThreadId.make("sibling")),
+                  lineage: {
+                    ...McpToolAccessTestkit.liveThreadShell(ThreadId.make("sibling")).lineage,
+                    spawnedBy: parentId,
+                  },
+                  pinnedAt,
+                  pinOrderKey: "k",
                   pinSectionId: "work",
                   mayBeLive: false,
                   hasRemoteTasks: false,
@@ -1945,9 +1973,10 @@ it.effect("MCP nest and unnest set a thread's placement, and a move away unnests
             dispatch: (command) => {
               if (
                 (command.type === "thread.pin.reorder" || command.type === "thread.pin") &&
-                command.threadId === "spawned"
+                command.threadId === "spawned" &&
+                command.sectionId !== undefined
               )
-                spawnedSection = command.sectionId ?? null;
+                spawnedSection = command.sectionId;
               dispatched.push(command);
               return Effect.succeed({ sequence: dispatched.length, storedEvents: [] });
             },
@@ -2033,8 +2062,8 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
     expect(applied.structuredContent).toMatchObject({
       dryRun: false,
       ...expected,
-      // The mock import created nothing new this time.
-      totals: { ...expected.totals, imported: 0 },
+      // This time the mock import only brought in the child.
+      totals: { ...expected.totals, imported: 1 },
       moved: expected.moved.filter((move) => move.threadId !== "import:claudeAgent:new"),
     });
     expect(imports).toEqual([{ dryRun: true }, { dryRun: false }]);
@@ -2069,6 +2098,15 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
         sectionId: "fin",
       }),
     ]);
+    // A brand-new import goes to the top of its section; an earlier one, to the end.
+    const placedKey = (threadId: string) => {
+      const command = dispatched.find(
+        (candidate) => candidate.type === "thread.pin" && candidate.threadId === threadId,
+      );
+      return command?.type === "thread.pin" ? command.orderKey : undefined;
+    };
+    expect(placedKey("import:claudeAgent:child")! < "n").toBe(true);
+    expect(placedKey("import:claudeAgent:grandchild")! > "n").toBe(true);
     // Nesting stays: the sync never unnests what it places.
     expect(dispatched.some((command) => command.type === "thread.nest.set")).toBe(false);
   }).pipe(
@@ -2103,7 +2141,13 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
             importAgentThreads: (_input, options) => {
               imports.push({ dryRun: options?.dryRun === true });
               return Effect.succeed({
-                imported: options?.dryRun === true ? [ThreadId.make("import:claudeAgent:new")] : [],
+                imported: [
+                  ThreadId.make(
+                    options?.dryRun === true
+                      ? "import:claudeAgent:new"
+                      : "import:claudeAgent:child",
+                  ),
+                ],
                 refreshed: [ThreadId.make("import:claudeAgent:in-fin")],
                 unchangedCount: 3,
                 linked: [ThreadId.make("import:claudeAgent:legal")],
@@ -2141,7 +2185,7 @@ it.effect("t3_claude_sessions_sync imports, then mirrors Claude sections and sta
             listActiveShellIndex: () =>
               Effect.succeed(
                 [
-                  claudeThread("in-fin", { key: "a", section: "fin" }),
+                  claudeThread("in-fin", { key: "n", section: "fin" }),
                   claudeThread("in-mine", { key: "b", section: "mine" }),
                   claudeThread("legal"),
                   claudeThread("starred"),

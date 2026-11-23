@@ -544,6 +544,19 @@ export const layer = McpToolAccess.toLayer(ThreadToolkit, {
           };
           const moved = listOf(thread.id);
           if (moved === null || moved !== listOf(parentId)) return yield* setNestParent(null);
+          // Placed before a thread outside its parent's group, such as the parent, it leaves it.
+          const before = input.beforeThreadId;
+          if (before != null && before !== thread.id) {
+            const lineageOf = new Map(index.map((entry) => [entry.id, entry.lineage] as const));
+            const seen = new Set<ThreadId>([before]);
+            let up = lineageOf.has(before) ? threadNestParentId(lineageOf.get(before)!) : null;
+            while (up !== null && up !== parentId && !seen.has(up)) {
+              seen.add(up);
+              const lineage = lineageOf.get(up);
+              up = lineage === undefined ? null : threadNestParentId(lineage);
+            }
+            if (up !== parentId) return yield* setNestParent(null);
+          }
         }
         return { sequence };
       }

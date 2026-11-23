@@ -19,7 +19,7 @@ import type { ClaudeDesktopOrganization } from "../../../project/ClaudeDesktopSe
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as ServerSettings from "../../../serverSettings.ts";
 import { dispatchFailure, newCommandId, unavailable } from "../../threadAccess.ts";
-import { effectivePinSection, planPinnedMove } from "./sidebarArrangement.ts";
+import { effectivePinSection, pinnedListOrder, planPinnedMove } from "./sidebarArrangement.ts";
 
 const CLAUDE_PROVIDER = "claudeAgent";
 const SECTION_TITLE_MAX_LENGTH = 64;
@@ -352,6 +352,13 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
       );
     }
     const current = yield* settings.getSettings.pipe(Effect.mapError(unavailable));
+    // New sessions go to the top of their list, as new threads do; others keep going to the end.
+    const importedIds = new Set(projectReports.flatMap((report) => report.importedThreadIds));
+    // Placed one by one at the top, the first new one must go last to stay first.
+    const inPlacingOrder = <T>(items: ReadonlyArray<T>, idOf: (item: T) => ThreadId) => [
+      ...items.filter((item) => !importedIds.has(idOf(item))),
+      ...items.filter((item) => importedIds.has(idOf(item))).toReversed(),
+    ];
     // Each move rekeys its destination list, so plan it against a fresh index.
     const place = Effect.fn("mcp.syncClaudeSessions.place")(function* (
       threadId: ThreadId,
@@ -363,7 +370,11 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
       const writes = planPinnedMove({
         thread,
         sectionId,
-        beforeThreadId: null,
+        beforeThreadId: importedIds.has(threadId)
+          ? (pinnedListOrder(index, sectionId, current.sidebarSections).find(
+              (entry) => entry.id !== threadId,
+            )?.id ?? null)
+          : null,
         index,
         sections: current.sidebarSections,
       });
@@ -381,11 +392,12 @@ export const syncClaudeSessions = Effect.fn("mcp.syncClaudeSessions")(function* 
           .pipe(Effect.mapError(dispatchFailure));
       }
     });
-    for (const placement of plan.placements) {
+    for (const placement of inPlacingOrder(plan.placements, (placement) => placement.threadId)) {
       const sectionId = sectionIdByTitle.get(sectionKey(placement.sectionTitle));
       if (sectionId !== undefined) yield* place(placement.threadId, sectionId);
     }
-    for (const threadId of plan.pins) yield* place(threadId, null);
+    for (const threadId of inPlacingOrder(plan.pins, (id) => id)) yield* place(threadId, null);
+    // Deepest last, so grandchildren follow their parents into the section.
     for (const follower of followers) {
       const title = plannedSections.find((section) => section.id === follower.sectionId)?.title;
       const sectionId = title === undefined ? undefined : sectionIdByTitle.get(sectionKey(title));
