@@ -1889,6 +1889,20 @@ code {
   margin: 0.65rem 0;
 }
 
+/* Rendered messages get roomier spacing than the composer. */
+.chat-markdown.leading-relaxed {
+  line-height: 1.75;
+}
+
+.chat-markdown p,
+.chat-markdown ul,
+.chat-markdown ol,
+.chat-markdown blockquote,
+.chat-markdown pre,
+.chat-markdown .chat-markdown-table-container {
+  margin: 1rem 0;
+}
+
 :is(.chat-markdown, .composer-tiptap) h1,
 :is(.chat-markdown, .composer-tiptap) h2,
 :is(.chat-markdown, .composer-tiptap) h3,
@@ -2022,7 +2036,7 @@ code {
 }
 
 .chat-markdown li + li {
-  margin-top: 0.25rem;
+  margin-top: 0.5rem;
 }
 
 /* GitHub-style task lists: the checkbox replaces the list marker. */
