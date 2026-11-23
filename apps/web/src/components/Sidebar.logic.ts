@@ -237,6 +237,12 @@ export type SidebarListItem =
         readonly descendantCount: number;
         readonly collapsed: boolean;
       };
+      /** Under this row: a "+N more" line for the parent group it ends. */
+      readonly more?: {
+        readonly parentKey: string;
+        readonly hiddenCount: number;
+        readonly depth: number;
+      };
     }
   | { readonly kind: "marker"; readonly marker: SidebarListMarker }
   // Project-folder mode only: a user-named section's header or empty-section drop slot.

@@ -595,6 +595,11 @@ type SidebarThreadRowProps = {
   nestedCount?: number | undefined;
   nestCollapsed?: boolean | undefined;
   onToggleNest?: ((threadKey: string) => void) | undefined;
+  /** A "+N more" line under this row, for the nested group it ends. */
+  moreBelow?:
+    | { readonly parentKey: string; readonly hiddenCount: number; readonly depth: number }
+    | undefined;
+  onShowMoreNested?: ((parentKey: string) => void) | undefined;
   navigationParent?: string | undefined;
   variantAction: SidebarSweepAction;
   settlementSupported: boolean;
@@ -1623,6 +1628,21 @@ const SidebarThreadRow = memo(function SidebarThreadRow(props: SidebarThreadRowP
           </TooltipTrigger>
           {detailsTooltip}
         </Tooltip>
+        {props.moreBelow !== undefined && !sortable?.isDragging ? (
+          <button
+            type="button"
+            onClick={() => props.onShowMoreNested?.(props.moreBelow!.parentKey)}
+            onPointerDown={(event) => event.stopPropagation()}
+            style={{
+              paddingInlineStart: `calc(${inFolder ? "var(--sidebar-row-content-inset)" : "0.625rem"} + ${props.moreBelow.depth * NEST_INDENT_REM}rem)`,
+            }}
+            className={cn(
+              "flex h-6 w-full cursor-pointer items-center rounded-lg text-left text-xs text-muted-foreground hover:bg-sidebar-row-hover hover:text-foreground",
+            )}
+          >
+            {gt("Show {count} more", { count: props.moreBelow.hiddenCount })}
+          </button>
+        ) : null}
       </li>
     );
   }

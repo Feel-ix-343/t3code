@@ -332,6 +332,8 @@ function sameSidebarProviderEntries(
   return true;
 }
 
+/** Children shown under a parent before a "+N more" line. */
+const NESTED_CHILD_LIMIT = 5;
 // Resolve providers per environment because default instance ids collide across environments.
 const sidebarProviderEntriesAtom = Atom.make((get) => {
   const providersByEnvironment = get(environmentPresentations.providersByEnvironmentAtom);
@@ -2031,6 +2033,11 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const collapsedSidebarSectionIds = useUiStateStore((state) => state.collapsedSidebarSectionIds);
   const setSidebarSectionCollapsed = useUiStateStore((state) => state.setSidebarSectionCollapsed);
   const collapsedSidebarThreadKeys = useUiStateStore((state) => state.collapsedSidebarThreadKeys);
+  // Parents whose children past the first few the user asked to see.
+  const [expandedNestKeys, setExpandedNestKeys] = useState<ReadonlySet<string>>(() => new Set());
+  const showAllNested = useStableCallback((parentKey: string) => {
+    setExpandedNestKeys((previous) => new Set(previous).add(parentKey));
+  });
   const toggleThreadNest = useStableCallback((threadKey: string) => {
     const { collapsedSidebarThreadKeys: collapsed, setSidebarThreadNestCollapsed } =
       useUiStateStore.getState();
@@ -2080,13 +2087,16 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         },
         isCollapsed: (key) => collapsedSidebarThreadKeys.includes(key),
         keepVisibleKey: routeRowThreadKey,
-      }).map(({ thread, depth, descendantCount, collapsed }) => ({
+        childLimit: NESTED_CHILD_LIMIT,
+        isExpanded: (key) => expandedNestKeys.has(key),
+      }).map(({ thread, depth, descendantCount, collapsed, more }) => ({
         kind: "thread",
         key: threadShellKey(thread),
         section,
         ...(depth === 0 && descendantCount === 0
           ? {}
           : { nest: { depth, descendantCount, collapsed } }),
+        ...(more === undefined ? {} : { more }),
       }));
     // Boring mode keeps a pinned open project or one the user filtered to, so it can start a thread.
     if (
@@ -2182,7 +2192,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const sidebarListItemsKey = sidebarListItemsFresh
     .map((item) =>
       item.kind === "thread"
-        ? `${item.section}:${item.key}:${item.nest?.depth ?? 0}:${item.nest?.descendantCount ?? 0}:${item.nest?.collapsed ?? false}`
+        ? `${item.section}:${item.key}:${item.nest?.depth ?? 0}:${item.nest?.descendantCount ?? 0}:${item.nest?.collapsed ?? false}:${item.more?.hiddenCount ?? 0}`
         : sidebarListItemId(item),
     )
     .join("\n");
@@ -4155,6 +4165,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                         nest: Extract<SidebarListItem, { kind: "thread" }>["nest"],
                         // The tree row of the project folder this row sits in.
                         folderRow?: string,
+                        more?: Extract<SidebarListItem, { kind: "thread" }>["more"],
                       ) => {
                         const threadKey = scopedThreadKey(
                           scopeThreadRef(thread.environmentId, thread.id),
@@ -4193,6 +4204,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             nestedCount={nest?.descendantCount ?? 0}
                             nestCollapsed={nest?.collapsed ?? false}
                             onToggleNest={toggleThreadNest}
+                            moreBelow={more}
+                            onShowMoreNested={showAllNested}
                             navigationParent={
                               folderRow ??
                               (section === "working" ||
@@ -4310,6 +4323,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                               item.section,
                               item.nest,
                               item.section === "active" ? folderRow : undefined,
+                              item.more,
                             ),
                           );
                           continue;

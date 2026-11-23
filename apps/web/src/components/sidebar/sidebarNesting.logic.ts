@@ -18,6 +18,12 @@ export interface SidebarNestedRow<T> {
   /** Every thread nested below this one in the list, shown or not. */
   readonly descendantCount: number;
   readonly collapsed: boolean;
+  /** Set on the last shown row of a group whose parent shows only its first children. */
+  readonly more?: {
+    readonly parentKey: string;
+    readonly hiddenCount: number;
+    readonly depth: number;
+  };
 }
 
 /**
@@ -32,6 +38,9 @@ export function nestSidebarThreads<T>(
     readonly parentKeyOf: (thread: T) => string | null;
     readonly isCollapsed: (key: string) => boolean;
     readonly keepVisibleKey?: string | null;
+    /** Show at most this many children under a parent until `isExpanded` says otherwise. */
+    readonly childLimit?: number;
+    readonly isExpanded?: (key: string) => boolean;
   },
 ): SidebarNestedRow<T>[] {
   const byKey = new Map(threads.map((thread) => [options.keyOf(thread), thread] as const));
@@ -78,7 +87,26 @@ export function nestSidebarThreads<T>(
     const collapsed = below.length > 0 && options.isCollapsed(key);
     rows.push({ thread, depth, descendantCount: below.length, collapsed });
     if (!collapsed) {
-      for (const child of childrenOf.get(key) ?? []) visit(child, depth + 1);
+      const children = childrenOf.get(key) ?? [];
+      const limit = options.childLimit;
+      if (limit === undefined || children.length <= limit || options.isExpanded?.(key) === true) {
+        for (const child of children) visit(child, depth + 1);
+        return;
+      }
+      // Past the limit only the open thread's branch stays in view.
+      const holdsOpen = (child: T) =>
+        options.keepVisibleKey != null &&
+        (options.keyOf(child) === options.keepVisibleKey ||
+          descendants(options.keyOf(child)).some(
+            (candidate) => options.keyOf(candidate) === options.keepVisibleKey,
+          ));
+      const shown = children.filter((child, index) => index < limit || holdsOpen(child));
+      for (const child of shown) visit(child, depth + 1);
+      const last = rows.length - 1;
+      rows[last] = {
+        ...rows[last]!,
+        more: { parentKey: key, hiddenCount: children.length - shown.length, depth: depth + 1 },
+      };
       return;
     }
     const kept = below.find((candidate) => options.keyOf(candidate) === options.keepVisibleKey);

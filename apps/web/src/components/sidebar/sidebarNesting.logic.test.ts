@@ -38,6 +38,24 @@ describe("nestSidebarThreads", () => {
     expect(nest([row("a"), row("b", "a"), row("c", "b")], ["a"], "c")).toEqual(["a (+2)", "  c"]);
   });
 
+  it("shows the first children past a limit and marks the rest on the group's last row", () => {
+    const rows = [row("p"), ...[1, 2, 3, 4, 5, 6, 7].map((n) => row(`c${n}`, "p")), row("x")];
+    const limited = (expanded: readonly string[], keep?: string) =>
+      nestSidebarThreads(rows, {
+        keyOf: (r) => r.key,
+        parentKeyOf: (r) => r.parent,
+        isCollapsed: () => false,
+        keepVisibleKey: keep ?? null,
+        childLimit: 5,
+        isExpanded: (key) => expanded.includes(key),
+      }).map(
+        (r) => `${r.thread.key}${r.more ? ` +${r.more.hiddenCount}@${r.more.parentKey}` : ""}`,
+      );
+    expect(limited([])).toEqual(["p", "c1", "c2", "c3", "c4", "c5 +2@p", "x"]);
+    expect(limited([], "c7")).toEqual(["p", "c1", "c2", "c3", "c4", "c5", "c7 +1@p", "x"]);
+    expect(limited(["p"])).toEqual(["p", "c1", "c2", "c3", "c4", "c5", "c6", "c7", "x"]);
+  });
+
   it("ignores collapse on a thread with no children", () => {
     expect(nest([row("a"), row("b")], ["a"])).toEqual(["a", "b"]);
   });
