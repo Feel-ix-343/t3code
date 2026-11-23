@@ -462,3 +462,121 @@ describe("sidebar settled pagination", () => {
     expect(screen.container.querySelectorAll("[data-thread-item]")).toHaveLength(loadedRows);
   });
 });
+
+describe("sidebar nesting", () => {
+  it("nests spawned threads, and a thread launched on a linked environment, under the launcher", async () => {
+    using stack = new DisposableStack();
+    const previousSettings = getClientSettings();
+    stack.defer(() => __setClientSettingsForTests(previousSettings));
+    __setClientSettingsForTests({ ...DEFAULT_CLIENT_SETTINGS, boringSidebarEnabled: true });
+    // Real styles, so the disclosure's place after the title is measured, not assumed.
+    const style = document.createElement("style");
+    style.textContent = appCss;
+    document.head.append(style);
+    stack.defer(() => style.remove());
+    vi.mocked(useNowMinute).mockReturnValue("2026-01-01T00:00");
+    const web = project("Larissa deep research");
+    const box: Project = {
+      ...project("box-repo"),
+      environmentId: EnvironmentId.make("box"),
+    };
+    const shell = (
+      owner: Project,
+      id: string,
+      title: string,
+      spawnedBy?: string,
+    ): EnvironmentThreadShell =>
+      makeThreadFixture({
+        environmentId: owner.environmentId,
+        projectId: owner.id,
+        id: ThreadId.make(id),
+        title,
+        lineage: {
+          rootThreadId: ThreadId.make(id),
+          parentThreadId: null,
+          relationshipToParent: null,
+          ...(spawnedBy === undefined ? {} : { spawnedBy: ThreadId.make(spawnedBy) }),
+        },
+      });
+    const threads = [
+      shell(web, "parent", "2026-11-18 Deep research LLM · Larissa RL (FinSearch)"),
+      shell(web, "child-1", "Learner MFU round 2: push past ~28%", "parent"),
+      shell(web, "child-2", "Merge agent and QM policies via projection head", "parent"),
+      shell(web, "grandchild", "stacking", "child-2"),
+      shell(web, "sibling", "Resume v30.3 from round 19 (fix full-state resume)"),
+      // Launched from "parent" on the box; the box does not know who launched it.
+      shell(box, "mcp:launch:remote", "Agent-only repro on the Modal box"),
+      shell(box, "box-own", "A thread started on the box"),
+    ];
+    const routeThreadRef = scopeThreadRef(web.environmentId, ThreadId.make("sibling"));
+    vi.mocked(useProjects).mockReturnValue([web, box]);
+    vi.mocked(useQuietThreadShells).mockReturnValue(threads);
+    vi.mocked(useThreadRouteTarget).mockReturnValue({ kind: "server", threadRef: routeThreadRef });
+    vi.mocked(useHandleNewThread).mockReturnValue({
+      activeDraftThread: null,
+      activeThread: null,
+      defaultProjectRef: { environmentId: web.environmentId, projectId: web.id },
+      defaultProjectFallbackReady: true,
+      handleNewThread: vi.fn().mockResolvedValue(null),
+      routeDraftId: null,
+      routeThreadRef,
+    });
+    const config = (remoteThreadNestParents: ReadonlyArray<unknown>) =>
+      ({
+        scratchWorkspaceRoot: null,
+        shellThreadFamilies: false,
+        settings: { sidebarSections: [], remoteThreadNestParents },
+      }) as unknown as EnvironmentServerConfig;
+    vi.mocked(useServerConfigs).mockReturnValue(
+      new Map([
+        [
+          web.environmentId,
+          config([
+            { environmentId: "box", threadId: "mcp:launch:remote", parentThreadId: "parent" },
+          ]),
+        ],
+        [box.environmentId, config([])],
+      ]),
+    );
+    await using screen = await render(
+      <SidebarProvider style={{ width: 380 }}>
+        <Sidebar routeReveal={{ observedKey: null, pendingKey: null }} />
+      </SidebarProvider>,
+    );
+    await expect.element(screen.getByText("stacking")).toBeInTheDocument();
+    const rows = [...screen.container.querySelectorAll<HTMLElement>("[data-thread-item]")];
+    const order = rows.map((row) => row.dataset.threadItem!.split(":").slice(1).join(":"));
+    expect(order.indexOf("mcp:launch:remote")).toBe(order.indexOf("parent") + 4);
+    expect(order.slice(order.indexOf("parent"), order.indexOf("parent") + 5)).toEqual([
+      "parent",
+      "child-1",
+      "child-2",
+      "grandchild",
+      "mcp:launch:remote",
+    ]);
+    const indentOf = (id: string) =>
+      rows
+        .find((row) => row.dataset.threadItem!.endsWith(`:${id}`))!
+        .querySelector<HTMLElement>("[data-sidebar-row]")!.style.paddingInlineStart;
+    expect(indentOf("parent")).toBe("");
+    expect(indentOf("child-2")).toContain("1.5rem");
+    expect(indentOf("grandchild")).toContain("3rem");
+    expect(indentOf("mcp:launch:remote")).toContain("1.5rem");
+    // The disclosure follows the parent's title; collapsing hides the remote child too.
+    const toggles = screen.container.querySelectorAll<HTMLElement>(
+      '[data-testid="sidebar-nest-toggle"]',
+    );
+    expect(toggles).toHaveLength(2);
+    const parentRow = rows.find((row) => row.dataset.threadItem!.endsWith(":parent"))!;
+    const parentToggle = parentRow.querySelector<HTMLElement>(
+      '[data-testid="sidebar-nest-toggle"]',
+    )!;
+    const parentTitle = parentRow.querySelector<HTMLElement>("[dir]")!;
+    expect(parentToggle.getBoundingClientRect().left).toBeGreaterThan(
+      parentTitle.getBoundingClientRect().left,
+    );
+    await act(() => parentToggle.click());
+    await vi.waitFor(() => expect(screen.container.textContent).not.toContain("stacking"));
+    expect(screen.container.textContent).not.toContain("Agent-only repro on the Modal box");
+  });
+});

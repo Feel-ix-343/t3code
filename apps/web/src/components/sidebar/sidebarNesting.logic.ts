@@ -91,3 +91,55 @@ export function nestSidebarThreads<T>(
   }
   return rows;
 }
+
+/**
+ * Nesting only happens within one list, so each thread `parentKeyOf` names whose parent sits in
+ * another list moves to the end of that list, where nesting puts it under the parent. Only lists
+ * with `canLeave` give threads up; a moved child's own children follow it.
+ */
+export function gatherChildrenToParents<T>(
+  lists: ReadonlyArray<{ readonly threads: readonly T[]; readonly canLeave: boolean }>,
+  options: {
+    readonly keyOf: (thread: T) => string;
+    readonly parentKeyOf: (thread: T) => string | null;
+  },
+): T[][] {
+  const result = lists.map((list) => [...list.threads]);
+  const listOf = new Map<string, number>();
+  const parentOf = new Map<string, string>();
+  result.forEach((threads, index) => {
+    for (const thread of threads) {
+      const key = options.keyOf(thread);
+      listOf.set(key, index);
+      const parentKey = options.parentKeyOf(thread);
+      if (parentKey !== null && parentKey !== key) parentOf.set(key, parentKey);
+    }
+  });
+  const inCycle = (key: string) => {
+    const seen = new Set([key]);
+    for (let at = parentOf.get(key); at !== undefined; at = parentOf.get(at)) {
+      if (seen.has(at)) return true;
+      seen.add(at);
+    }
+    return false;
+  };
+  const leaves = new Map<string, boolean>();
+  result.forEach((threads, index) => {
+    for (const thread of threads) leaves.set(options.keyOf(thread), lists[index]!.canLeave);
+  });
+  for (let changed = true; changed;) {
+    changed = false;
+    for (const [key, parentKey] of parentOf) {
+      const from = listOf.get(key);
+      const to = listOf.get(parentKey);
+      if (from === undefined || to === undefined || from === to) continue;
+      if (leaves.get(key) !== true || inCycle(key)) continue;
+      const index = result[from]!.findIndex((thread) => options.keyOf(thread) === key);
+      const [thread] = result[from]!.splice(index, 1);
+      result[to]!.push(thread!);
+      listOf.set(key, to);
+      changed = true;
+    }
+  }
+  return result;
+}

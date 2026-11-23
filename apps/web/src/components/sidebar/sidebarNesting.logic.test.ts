@@ -1,7 +1,11 @@
 import { ThreadId } from "@t3tools/contracts";
 import { describe, expect, it } from "vite-plus/test";
 
-import { nestSidebarThreads, sidebarNestParentId } from "./sidebarNesting.logic";
+import {
+  gatherChildrenToParents,
+  nestSidebarThreads,
+  sidebarNestParentId,
+} from "./sidebarNesting.logic";
 
 type Row = { readonly key: string; readonly parent: string | null };
 const row = (key: string, parent: string | null = null): Row => ({ key, parent });
@@ -99,5 +103,38 @@ describe("sidebarNestParentId placement", () => {
         nestParentThreadId: chosen,
       }),
     ).toBe(chosen);
+  });
+});
+
+describe("gatherChildrenToParents", () => {
+  const gather = (
+    lists: ReadonlyArray<{ readonly threads: readonly Row[]; readonly canLeave: boolean }>,
+  ) =>
+    gatherChildrenToParents(lists, { keyOf: (r) => r.key, parentKeyOf: (r) => r.parent }).map(
+      (threads) => threads.map((r) => r.key),
+    );
+
+  it("moves a child, and its own child, into the list its parent is in", () => {
+    expect(
+      gather([
+        { threads: [row("pinned-parent")], canLeave: false },
+        { threads: [row("local")], canLeave: true },
+        {
+          threads: [row("grandchild", "child"), row("child", "pinned-parent"), row("other")],
+          canLeave: true,
+        },
+      ]),
+    ).toEqual([["pinned-parent", "child", "grandchild"], ["local"], ["other"]]);
+  });
+
+  it("leaves children in lists that cannot give them up, and cycles in place", () => {
+    expect(
+      gather([
+        { threads: [row("parent")], canLeave: true },
+        { threads: [row("settled-child", "parent")], canLeave: false },
+        { threads: [row("a", "b")], canLeave: true },
+        { threads: [row("b", "a")], canLeave: true },
+      ]),
+    ).toEqual([["parent"], ["settled-child"], ["a"], ["b"]]);
   });
 });

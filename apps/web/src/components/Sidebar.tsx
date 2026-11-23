@@ -2,11 +2,7 @@ import { thrownErrorMessage } from "@t3tools/client-runtime/errors";
 import { msg, T, useGT, useMessages } from "gt-react";
 import { m } from "../i18n/messages";
 import { attachSidebarTree } from "../lib/sidebarTree";
-import {
-  type ContextMenuItem,
-  type EnvironmentId,
-  type ScopedProjectRef,
-} from "@t3tools/contracts";
+import { type ContextMenuItem, EnvironmentId, type ScopedProjectRef } from "@t3tools/contracts";
 import type { SidebarSection as SidebarSectionDefinition } from "@t3tools/contracts/settings";
 import { topOfPinnedRunOrderKey } from "@t3tools/shared/pinOrderKey";
 import type { EnvironmentServerConfig } from "@t3tools/client-runtime/connection";
@@ -72,7 +68,7 @@ import {
   type ContextMenuSource,
   ProjectId,
   type ScopedThreadRef,
-  type ThreadId,
+  ThreadId,
 } from "@t3tools/contracts";
 import {
   resolveListedAncestorThreadRef,
@@ -245,7 +241,11 @@ import {
   restrictBelowSidebarLabel,
 } from "./Sidebar.drag";
 import { SidebarPointerSensor } from "./Sidebar.pointer";
-import { nestSidebarThreads, sidebarNestParentId } from "./sidebar/sidebarNesting.logic";
+import {
+  gatherChildrenToParents,
+  nestSidebarThreads,
+  sidebarNestParentId,
+} from "./sidebar/sidebarNesting.logic";
 import { createSidebarListMotion } from "./Sidebar.motion";
 import { createSidebarShiftGuard } from "./Sidebar.shiftGuard";
 import {
@@ -2033,6 +2033,33 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       useUiStateStore.getState();
     setSidebarThreadNestCollapsed(threadKey, !collapsed.includes(threadKey));
   });
+  // Threads launched into a linked environment nest under their launcher, which recorded them.
+  const remoteNestParentByKey = new Map<
+    string,
+    { readonly parentKey: string | null; readonly ownerEnvironmentId: EnvironmentId }
+  >();
+  // Only project folders can show a linked environment's thread in a list of this one's.
+  for (const [environmentId, config] of boringSidebarEnabled ? serverConfigs : []) {
+    // An environment on a build without the setting sends none.
+    for (const record of config.settings.remoteThreadNestParents ?? []) {
+      remoteNestParentByKey.set(
+        scopedThreadKey(
+          scopeThreadRef(EnvironmentId.make(record.environmentId), ThreadId.make(record.threadId)),
+        ),
+        {
+          parentKey:
+            record.parentThreadId === null
+              ? null
+              : scopedThreadKey(
+                  scopeThreadRef(environmentId, ThreadId.make(record.parentThreadId)),
+                ),
+          ownerEnvironmentId: environmentId,
+        },
+      );
+    }
+  }
+  const remoteNestParentKey = (thread: EnvironmentThreadShell) =>
+    remoteNestParentByKey.get(threadShellKey(thread))?.parentKey ?? null;
   const sidebarListItemsFresh = ((): readonly SidebarListItem[] => {
     const rowsOf = (
       list: readonly EnvironmentThreadShell[],
@@ -2041,6 +2068,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       nestSidebarThreads(list, {
         keyOf: threadShellKey,
         parentKeyOf: (thread) => {
+          const remoteParentKey = remoteNestParentKey(thread);
+          if (remoteParentKey !== null) return remoteParentKey;
           const parentId = sidebarNestParentId(thread.lineage);
           return parentId === null
             ? null
@@ -2070,23 +2099,62 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     }
     const items: SidebarListItem[] = [{ kind: "marker", marker: "pinned-header" }];
     if (projectFolders !== null) {
-      items.push(...rowsOf(plainPinnedThreads, "pinned"));
+      // A linked environment's thread sits in its own project's folder; one launched from a
+      // thread here joins that thread's list, so it can nest under it.
+      const lists: Array<{
+        readonly head: readonly SidebarListItem[];
+        readonly threads: readonly EnvironmentThreadShell[];
+        readonly section: SidebarSection;
+        readonly canLeave: boolean;
+        readonly placeholderFor?: string;
+      }> = [{ head: [], threads: plainPinnedThreads, section: "pinned", canLeave: false }];
       for (const section of sidebarSections) {
-        items.push({ kind: "custom-section", sectionId: section.id, placeholder: false });
+        const head: SidebarListItem[] = [
+          { kind: "custom-section", sectionId: section.id, placeholder: false },
+        ];
         const rows = sectionPinnedThreads.get(section.id) ?? EMPTY_THREADS;
         if (collapsedSidebarSectionIds.includes(section.id)) {
-          items.push(...rowsOf(routeThreadOnly(rows, routeRowThreadKey), "pinned"));
+          lists.push({
+            head,
+            threads: routeThreadOnly(rows, routeRowThreadKey),
+            section: "pinned",
+            canLeave: false,
+          });
           continue;
         }
-        if (rows.length === 0)
-          items.push({ kind: "custom-section", sectionId: section.id, placeholder: true });
-        items.push(...rowsOf(rows, "pinned"));
+        lists.push({
+          head,
+          threads: rows,
+          section: "pinned",
+          canLeave: false,
+          placeholderFor: section.id,
+        });
       }
-      items.push({ kind: "marker", marker: "pinned-divider" });
+      const foldersStart = lists.length;
       for (const folder of projectFolders) {
-        items.push({ kind: "folder", projectKey: folder.group.projectKey });
-        items.push(...rowsOf(folder.threads, "active"));
+        lists.push({
+          head: [{ kind: "folder", projectKey: folder.group.projectKey }],
+          threads: folder.threads,
+          section: "active",
+          canLeave: true,
+        });
       }
+      const gathered =
+        remoteNestParentByKey.size === 0
+          ? lists.map((list) => list.threads)
+          : gatherChildrenToParents(lists, {
+              keyOf: threadShellKey,
+              parentKeyOf: remoteNestParentKey,
+            });
+      lists.forEach((list, index) => {
+        if (index === foldersStart) items.push({ kind: "marker", marker: "pinned-divider" });
+        items.push(...list.head);
+        const threads = gathered[index]!;
+        if (list.placeholderFor !== undefined && threads.length === 0)
+          items.push({ kind: "custom-section", sectionId: list.placeholderFor, placeholder: true });
+        items.push(...rowsOf(threads, list.section));
+      });
+      if (foldersStart === lists.length) items.push({ kind: "marker", marker: "pinned-divider" });
     } else {
       items.push(...rowsOf(pinnedThreads, "pinned"));
       items.push({ kind: "marker", marker: "pinned-divider" });
@@ -2433,11 +2501,40 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       })();
     },
   );
-  const unnestThread = async (threadRef: ScopedThreadRef) =>
-    !reportArrangeFailure(
-      await setThreadNestParent(threadRef, null),
+  /** A linked environment's thread nested under its launcher here, by the launcher's record. */
+  const remoteNestOf = (threadKey: string) => {
+    const remote = remoteNestParentByKey.get(threadKey);
+    return remote !== undefined && remote.parentKey !== null && nestedThreadKeys.has(threadKey)
+      ? remote
+      : null;
+  };
+  const unnestThread = async (threadRef: ScopedThreadRef) => {
+    const remote = remoteNestOf(scopedThreadKey(threadRef));
+    if (remote === null) {
+      return !reportArrangeFailure(
+        await setThreadNestParent(threadRef, null),
+        gt("Failed to unnest thread"),
+      );
+    }
+    const records =
+      serverConfigs.get(remote.ownerEnvironmentId)?.settings.remoteThreadNestParents ?? [];
+    return !reportArrangeFailure(
+      await updateEnvironmentSettings({
+        environmentId: remote.ownerEnvironmentId,
+        input: {
+          patch: {
+            remoteThreadNestParents: records.map((record) =>
+              record.environmentId === threadRef.environmentId &&
+              record.threadId === threadRef.threadId
+                ? { ...record, parentThreadId: null }
+                : record,
+            ),
+          },
+        },
+      }),
       gt("Failed to unnest thread"),
     );
+  };
   /** A nested row dropped back into its own list unnests even where its order cannot change. */
   const unnestsInPlace = (activeKey: string, overId: string) => {
     if (overId === activeKey || !nestedThreadKeys.has(activeKey)) return false;
@@ -2445,8 +2542,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     return arranged !== null && dropStaysInOwnList(arranged.thread, arranged.target);
   };
   const arrangeThread = (activeKey: string, overId: string) => {
-    const arranged = planArrangeDrop(activeKey, overId);
     const thread = threadByKey.get(activeKey);
+    // It only shows in this list under its launcher, so dropping it anywhere sends it home.
+    if (thread !== undefined && remoteNestOf(activeKey) !== null) {
+      void unnestThread(scopeThreadRef(thread.environmentId, thread.id));
+      return;
+    }
+    const arranged = planArrangeDrop(activeKey, overId);
     if (arranged === null || thread === undefined) return;
     const { plan } = arranged;
     const unnests = nestedThreadKeys.has(activeKey);
@@ -2591,7 +2693,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       return createSidebarCollisionDetection((id) =>
         activeKey === undefined
           ? true
-          : (planArrangeDrop(activeKey, id)?.plan.kind ?? "none") !== "none" ||
+          : remoteNestOf(activeKey) !== null ||
+            (planArrangeDrop(activeKey, id)?.plan.kind ?? "none") !== "none" ||
             unnestsInPlace(activeKey, id),
       );
     }
