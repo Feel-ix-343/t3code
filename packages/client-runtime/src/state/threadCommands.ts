@@ -32,7 +32,7 @@ import {
   editQueuedRun,
   interruptThreadTurn,
   forkSideChat,
-  forkThreadFromRun,
+  forkThread,
   markThreadUnread,
   mergeThreadBack,
   promoteQueuedRun,
@@ -399,9 +399,9 @@ export function createThreadEnvironmentAtoms<R, E>(
       scheduler,
       concurrency,
     }),
-    forkFromRun: createEnvironmentCommand(runtime, {
-      label: "environment-data:commands:thread:fork-from-run",
-      execute: forkThreadFromRun,
+    fork: createEnvironmentCommand(runtime, {
+      label: "environment-data:commands:thread:fork",
+      execute: forkThread,
       scheduler,
       concurrency: {
         mode: "serial",

@@ -58,6 +58,7 @@ import {
 } from "./SnapShotAttachmentDetails";
 import { GuestMessageName, guestBubbleClassName } from "./guestMessageStyle";
 import { MessageCopyButton } from "./MessageCopyButton";
+import { TimelineForkButton } from "./TimelineForkButton";
 import { promptLinkFor } from "../promptLinks/copyPromptLink";
 import { PierreEntryIcon } from "./PierreEntryIcon";
 import { formatBytes } from "../../lib/formatBytes";
@@ -372,6 +373,9 @@ function AutomationMessageRow({ row }: { row: Extract<TimelineRow, { kind: "mess
             <div className="flex items-center gap-0.5">
               {typeof revertTurnCount === "number" && (
                 <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+              )}
+              {row.forkSource && (
+                <TimelineForkButton projectedItem={row.forkSource} message={row.message} />
               )}
               <MessageCopyButton text={text} variant="ghost" />
               {promptLink !== null && (
@@ -875,6 +879,9 @@ function UserTimelineRow({ row }: { row: Extract<TimelineRow, { kind: "message" 
       <div className={cn("flex items-center gap-0.5", floatActions && "flex-wrap justify-end")}>
         {typeof revertTurnCount === "number" && (
           <RevertUserMessageButton turnCount={revertTurnCount} messageId={row.message.id} />
+        )}
+        {row.forkSource && (
+          <TimelineForkButton projectedItem={row.forkSource} message={row.message} />
         )}
         {copyText && (
           <MessageCopyButton

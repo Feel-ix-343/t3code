@@ -1153,6 +1153,35 @@ export function deriveRevertTurnCountByUserMessageId(input: {
   return byUserMessageId;
 }
 
+/**
+ * Where "Fork from here" on a user message forks: the last completed response of an earlier run,
+ * so the fork ends just before the message. Inherited rows count, forking their source thread.
+ */
+export function deriveForkSourceByUserMessageId(
+  timelineEntries: ReadonlyArray<TimelineEntry>,
+): Map<ChatMessage["id"], OrchestrationV2ProjectedTurnItem> {
+  const byUserMessageId = new Map<ChatMessage["id"], OrchestrationV2ProjectedTurnItem>();
+  let latest: OrchestrationV2ProjectedTurnItem | null = null;
+  // The latest response from a run other than `latest`'s, for a message steered into that run.
+  let beforeLatestRun: OrchestrationV2ProjectedTurnItem | null = null;
+  for (const entry of timelineEntries) {
+    if (entry.kind !== "message" || entry.projectedItem === undefined) continue;
+    const { message, projectedItem } = entry;
+    const { item } = projectedItem;
+    if (item.type === "assistant_message") {
+      if (item.status !== "completed" || item.runId === null) continue;
+      if (latest !== null && latest.item.runId !== item.runId) beforeLatestRun = latest;
+      latest = projectedItem;
+      continue;
+    }
+    if (message.role !== "user") continue;
+    const source =
+      latest !== null && latest.item.runId === message.runId ? beforeLatestRun : latest;
+    if (source !== null) byUserMessageId.set(message.id, source);
+  }
+  return byUserMessageId;
+}
+
 // A missing snapshot (no git, or a side chat) still pins a conversation position; only
 // restoring files needs a ready one.
 function isRewindableCheckpoint(checkpoint: Pick<OrchestrationV2Checkpoint, "status">) {

@@ -112,7 +112,7 @@ function makeSourceProjection(sourceRun: OrchestrationV2Run): OrchestrationV2Thr
 const planFork = (
   sourceRun: OrchestrationV2Run,
   sourceProjection = makeSourceProjection(sourceRun),
-  options: { readonly sideChat?: boolean } = {},
+  options: { readonly sideChat?: boolean; readonly title?: string } = { title: "Awake fork" },
 ) =>
   Effect.gen(function* () {
     const service = yield* ThreadForkService.ThreadForkServiceV2;
@@ -126,7 +126,6 @@ const planFork = (
       },
       transferId: ContextTransferId.make("context-transfer:fork-snoozed-source"),
       targetThreadId,
-      title: "Awake fork",
       ...options,
       createdBy: "user",
       creationSource: "mobile",
@@ -188,6 +187,15 @@ it.effect("resets a fork's pin, snooze, settle and delegation state but keeps it
       threadId: sourceThreadId,
       runId: sourceRunId,
     });
+  }),
+);
+
+it.effect("titles an untitled fork after its source", () =>
+  Effect.gen(function* () {
+    const sourceRun = makeSourceRun("completed");
+    const result = yield* planFork(sourceRun, makeSourceProjection(sourceRun), {});
+
+    assert.equal(result.targetThread.title, "Snoozed source (fork)");
   }),
 );
 

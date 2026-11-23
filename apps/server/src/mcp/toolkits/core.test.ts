@@ -891,6 +891,53 @@ it.effect("an MCP pin lands above every existing pin, as a client pin does", () 
   );
 });
 
+it.effect("an agent forks its own thread from the latest stable run by default", () => {
+  const dispatched: Array<OrchestrationV2ServerCommand> = [];
+  return Effect.gen(function* () {
+    const server = yield* McpServer.McpServer;
+    const result = yield* server
+      .callTool({ name: "t3_thread_transfer", arguments: { action: "fork" } })
+      .pipe(
+        Effect.provideService(McpInvocationContext.McpInvocationContext, scope),
+        Effect.provideService(McpSchema.McpServerClient, client),
+      );
+
+    expect(result.isError).toBe(false);
+    expect(dispatched).toEqual([
+      expect.objectContaining({
+        type: "thread.fork",
+        sourceThreadId: threadId,
+        sourcePoint: { type: "latest_stable" },
+        createdBy: "agent",
+        creationSource: "mcp",
+      }),
+    ]);
+    expect(dispatched[0]).not.toHaveProperty("title");
+    const fork = dispatched[0] as Extract<OrchestrationV2ServerCommand, { type: "thread.fork" }>;
+    expect(result.structuredContent).toMatchObject({ targetThreadId: fork.targetThreadId });
+  }).pipe(
+    Effect.provide(
+      layerThreadToolkit.pipe(
+        Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+        Layer.provide(NodeCrypto.layer),
+        Layer.provide(
+          Layer.mock(ThreadManagement.ThreadManagementService)({
+            getThreadShell: (id) => Effect.succeed(McpToolAccessTestkit.liveThreadShell(id)),
+            getProjectThreadRecords: ({ threadId: id }) =>
+              Effect.succeed(
+                McpToolAccessTestkit.idleThreadProjection(McpToolAccessTestkit.liveThreadShell(id)),
+              ),
+            dispatch: (command) => {
+              dispatched.push(command);
+              return Effect.succeed({ sequence: dispatched.length, storedEvents: [] });
+            },
+          }),
+        ),
+      ),
+    ),
+  );
+});
+
 it.effect("an MCP move places a pin inside a sidebar section, between its neighbors", () => {
   const dispatched: Array<OrchestrationV2ServerCommand> = [];
   const pinnedAt = DateTime.makeUnsafe("2026-11-10T00:00:00.000Z");

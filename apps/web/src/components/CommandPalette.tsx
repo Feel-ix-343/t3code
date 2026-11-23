@@ -70,6 +70,8 @@ import {
   FolderGit2Icon,
   FolderIcon,
   FolderPlusIcon,
+  GitBranchIcon,
+  GitForkIcon,
   MessageSquareDashedIcon,
   LinkIcon,
   MessageSquareIcon,
@@ -103,6 +105,7 @@ import { useAtomValue } from "@effect/atom-react";
 import { isDesktopLocalConnectionTarget } from "../connection/desktopLocal";
 import { useDesktopLocalBootstraps } from "../connection/useDesktopLocalBootstraps";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { canForkThreadShell, useForkThread } from "../hooks/useForkThread";
 import { useOpenPanelPullRequestUrl } from "../hooks/useOpenPanelPullRequestUrl";
 import { copyThreadReference } from "../lib/copyThreadReference";
 import {
@@ -503,6 +506,11 @@ function OpenCommandPaletteDialog(props: {
   const { activeDraftThread, activeThread, defaultProjectRef, handleNewThread } =
     useHandleNewThread();
   const paletteRouteTarget = useThreadRouteTarget();
+  const forkThread = useForkThread();
+  const canOperateActiveThread = useEnvironmentScope(
+    activeThread?.environmentId ?? null,
+    AuthOrchestrationOperateScope,
+  );
   const projects = useProjects();
   const referenceThreadRef =
     pathname === "/pull-requests"
@@ -1417,6 +1425,33 @@ function OpenCommandPaletteDialog(props: {
         openThreadFind(activeThreadKey);
       },
     });
+  }
+
+  if (activeThread && canOperateActiveThread && canForkThreadShell(activeThread)) {
+    const sourceThreadRef = scopeThreadRef(activeThread.environmentId, activeThread.id);
+    actionItems.push({
+      kind: "action",
+      value: "action:fork-thread",
+      searchTerms: ["fork", "branch", "copy", "duplicate", "conversation"],
+      title: gt("Fork current thread"),
+      icon: <GitForkIcon className={ITEM_ICON_CLASS} />,
+      shortcutCommand: "thread.fork",
+      run: async () => {
+        await forkThread({ sourceThreadRef });
+      },
+    });
+    if (activeThread.branch) {
+      actionItems.push({
+        kind: "action",
+        value: "action:fork-thread-worktree",
+        searchTerms: ["fork", "worktree", "branch", "duplicate", "conversation"],
+        title: gt("Fork current thread into new worktree"),
+        icon: <GitBranchIcon className={ITEM_ICON_CLASS} />,
+        run: async () => {
+          await forkThread({ sourceThreadRef, newWorktree: true });
+        },
+      });
+    }
   }
 
   if (activeThreadPreviewOpen && previewBridge) {

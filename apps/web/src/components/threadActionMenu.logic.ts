@@ -7,6 +7,8 @@ import { m, type MessageResolver } from "../i18n/messages";
 export type ThreadActionMenuId =
   | "find"
   | "new-thread-on-branch"
+  | "fork"
+  | "fork-worktree"
   | "filter-by-project"
   | "turn-into-project"
   | "project-settings"
@@ -101,6 +103,8 @@ export interface ThreadActionMenuState {
   /** False where no inline title editor is rendered, such as sidebar search results. */
   readonly canRename?: boolean;
   readonly branch: string | null;
+  /** Forking needs a server thread; a fork into a worktree also needs its branch. */
+  readonly canFork?: boolean;
   readonly projectFilter: {
     readonly label: string;
     readonly isActive: boolean;
@@ -158,6 +162,20 @@ export function buildThreadActionMenuItems(
             label: resolve(msg("New thread on {branch}", { branch: state.branch })),
             icon: "message-square-plus",
           },
+        ]
+      : []),
+    ...(state.canFork
+      ? [
+          { id: "fork" as const, label: resolve(msg("Fork thread")), icon: "git-fork" },
+          ...(state.branch
+            ? [
+                {
+                  id: "fork-worktree" as const,
+                  label: resolve(msg("Fork into new worktree")),
+                  icon: "git-branch",
+                },
+              ]
+            : []),
         ]
       : []),
     ...(state.supports.pinning

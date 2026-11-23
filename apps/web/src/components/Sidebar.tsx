@@ -137,6 +137,7 @@ import {
   useThreadActions,
 } from "../hooks/useThreadActions";
 import { useHandleNewThread } from "../hooks/useHandleNewThread";
+import { canForkThreadShell, useForkThread } from "../hooks/useForkThread";
 import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
@@ -1054,6 +1055,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const newThreadContext = useHandleNewThread();
   // Row callbacks capture only the handler; the rest of the context changes with the route.
   const { handleNewThread } = newThreadContext;
+  const forkThread = useForkThread();
   const primaryEnvironmentId = usePrimaryEnvironmentId();
   const clearSelection = useThreadSelectionStore((s) => s.clearSelection);
   const setSelectionAnchor = useThreadSelectionStore((s) => s.setAnchor);
@@ -3377,6 +3379,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                   AuthOrchestrationOperateScope,
                 ),
                 branch: thread.branch ?? null,
+                canFork: canForkThreadShell(thread),
                 // An archived project is not a filter choice.
                 projectFilter:
                   threadProjectGroup && !threadProjectGroup.archived
@@ -3477,6 +3480,13 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
             }
             return;
           }
+          case "fork":
+          case "fork-worktree":
+            await forkThread({
+              sourceThreadRef: threadRef,
+              newWorktree: clicked.value === "fork-worktree",
+            });
+            return;
           case "settle":
             attemptSettle(threadRef);
             return;

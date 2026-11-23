@@ -20,7 +20,6 @@ import {
   type RunAttemptId,
   type ServerProviderSkill,
   type RunId,
-  ThreadId,
 } from "@t3tools/contracts";
 import { parseScopedThreadKey } from "@t3tools/client-runtime/environment";
 import { resolveWorkGroupScrollAnchor } from "@t3tools/client-runtime/work-log/scroll-anchor";
@@ -113,6 +112,7 @@ import {
   TimelineRowActivityCtx,
   type WorkGroupViewState,
   type TimelineRow,
+  type TimelineForkInput,
 } from "./timelineRowContext";
 import { TimelineRowTimestamp, ActivityShimmerOverlay } from "./TimelineRowParts";
 import {
@@ -290,10 +290,7 @@ interface MessagesTimelineProps {
     readonly open?: () => void;
   } | null;
   workflowOpening?: WorkflowOpening | null;
-  onForkFromRun?: (input: {
-    readonly sourceThreadId: ThreadId;
-    readonly runId: RunId;
-  }) => Promise<void>;
+  onForkFromRun?: (input: TimelineForkInput) => Promise<void>;
   supportsConversationRollback: boolean;
   threadStartCheckpointAvailable?: boolean;
   availableRevertTurnCounts?: ReadonlySet<number> | undefined;

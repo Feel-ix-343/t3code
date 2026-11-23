@@ -24,13 +24,21 @@ import { useEffect, useRef, createContext, type MouseEvent, type ReactNode } fro
 import { type LegendListRef } from "@legendapp/list/react";
 import type { CodexArtifactTemplate } from "@t3tools/shared/codexArtifactTemplates";
 import type { PendingApproval } from "../../session-logic";
-import { type ChatFileAttachment } from "../../types";
+import { type ChatFileAttachment, type ChatMessage } from "../../types";
 import { type ExpandedImageItem, ExpandedImagePreview } from "./ExpandedImagePreview";
 import { type AssistantCitationTarget } from "./AssistantCitationSource";
 import { type MessagesTimelineRow, type WorkGroupScrollAnchor } from "./MessagesTimeline.logic";
 import { type TimestampFormat } from "@t3tools/contracts/settings";
 import type { TurnItemDetailSource } from "../../state/queries";
 import { type HandoffTimelineRun } from "./V2LifecycleRow";
+
+export interface TimelineForkInput {
+  readonly sourceThreadId: ThreadId;
+  /** The last run the fork keeps. */
+  readonly runId: RunId;
+  /** The user message after that run, put back in the fork's composer. */
+  readonly message?: ChatMessage;
+}
 
 /**
  * Where an expanded row reads an item's detail and a command's output. The owner's rows read them
@@ -90,10 +98,8 @@ export interface TimelineRowSharedState {
     intent?: SideThreadOpenIntent,
   ) => void;
   workflowOpening: WorkflowOpening | null;
-  /** Absent hides "Fork from this response", as in the guest view. */
-  onForkFromRun:
-    | ((input: { readonly sourceThreadId: ThreadId; readonly runId: RunId }) => Promise<void>)
-    | undefined;
+  /** Absent hides the fork buttons, as in the guest view. */
+  onForkFromRun: ((input: TimelineForkInput) => Promise<void>) | undefined;
   onToggleTurnFold: (runId: RunId) => void;
   onToggleAttemptFold: (attemptId: RunAttemptId) => void;
   onFileOpen: (attachment: ChatFileAttachment) => void;
