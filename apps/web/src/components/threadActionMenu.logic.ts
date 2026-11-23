@@ -14,6 +14,8 @@ export type ThreadActionMenuId =
   | "unpin"
   | "section"
   | `section:${string}`
+  | "move-environment"
+  | `move:${string}`
   | "settle"
   | "unsettle"
   | "auto-settle"

@@ -83,6 +83,7 @@ import {
   SquarePenIcon,
   TextSearchIcon,
   UserPlusIcon,
+  ArrowRightLeftIcon,
 } from "lucide-react";
 import { openThreadFind } from "./chat/threadFindStore";
 import { dispatchPreviewAction } from "./preview/previewActionBus";
@@ -259,6 +260,7 @@ import {
   PORT_FORWARD_GROUP_PREFIX,
   useCommandPalettePortForwardItem,
 } from "./CommandPalettePortForwardItems";
+import { useMoveThread, useThreadMoveTargets } from "./useThreadMove";
 import {
   CommandPaletteVirtualizedResults,
   scrollCommandPaletteRowIntoView,
@@ -555,6 +557,8 @@ function OpenCommandPaletteDialog(props: {
     activeThread: activeThread ?? null,
     query: deferredQuery,
   });
+  const moveTargets = useThreadMoveTargets();
+  const moveThread = useMoveThread();
   const currentView = viewStack.at(-1)?.view ?? null;
   const threadSearchQuery = currentView === null && !isActionsOnly ? deferredQuery : "";
   const [browseGeneration, setBrowseGeneration] = useState(0);
@@ -1434,6 +1438,32 @@ function OpenCommandPaletteDialog(props: {
   }
 
   if (portForwardItem) actionItems.push(portForwardItem);
+
+  const activeMoveTargets = activeThread ? (moveTargets.get(activeThread.environmentId) ?? []) : [];
+  if (activeThread && activeMoveTargets.length > 0) {
+    actionItems.push({
+      kind: "submenu",
+      value: "action:move-thread",
+      title: gt("Move thread to environment"),
+      searchTerms: ["move", "offload", "environment", "machine", "remote", "linked"],
+      icon: <ArrowRightLeftIcon className={ITEM_ICON_CLASS} />,
+      addonIcon: <ArrowRightLeftIcon className={ADDON_ICON_CLASS} />,
+      groups: [
+        {
+          value: "move-thread-targets",
+          label: gt("Linked environments"),
+          items: activeMoveTargets.map((target) => ({
+            kind: "action" as const,
+            value: `move-thread:${target.environmentId}`,
+            title: target.label,
+            searchTerms: [target.label],
+            icon: <ArrowRightLeftIcon className={ITEM_ICON_CLASS} />,
+            run: () => moveThread(activeThread, target),
+          })),
+        },
+      ],
+    });
+  }
 
   const promptLinkTarget = paletteRouteTarget
     ? paletteRouteTarget.kind === "server"
