@@ -244,6 +244,7 @@ import { SidebarPointerSensor } from "./Sidebar.pointer";
 import {
   gatherChildrenToParents,
   nestSidebarThreads,
+  planNestedRowDrop,
   sidebarNestParentId,
 } from "./sidebar/sidebarNesting.logic";
 import { createSidebarListMotion } from "./Sidebar.motion";
@@ -1116,6 +1117,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     readonly targetSection: SidebarSection | null;
     // Folder mode: the user-named section the row would land in.
     readonly targetSectionId?: string | null;
+    // Folder mode, a nested row: whether it lands among its siblings or leaves its parent's group.
+    readonly nestDrop?: "stay" | "leave" | null;
     readonly contextDrag: boolean;
   } | null>(null);
   const dragSensorRef = useRef<SidebarPointerSensor | null>(null);
@@ -2192,12 +2195,21 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
     // Update the local list too; threadByKey already omits rows moved into collapsed shelves.
     sidebarListItems = sidebarListItemsFresh;
   }
-  // Rows shown under the thread they nest in; dragging one anywhere unnests it.
-  const nestedThreadKeys = new Set(
-    sidebarListItems.flatMap((item) =>
-      item.kind === "thread" && (item.nest?.depth ?? 0) > 0 ? [item.key] : [],
-    ),
-  );
+  // Rows shown under the thread they nest in, by the row they show under.
+  const shownNestParentByKey = new Map<string, string>();
+  const nestPath: string[] = [];
+  for (const item of sidebarListItems) {
+    if (item.kind !== "thread") {
+      nestPath.length = 0;
+      continue;
+    }
+    const depth = item.nest?.depth ?? 0;
+    nestPath.length = depth;
+    const parentKey = depth > 0 ? nestPath[depth - 1] : undefined;
+    if (parentKey !== undefined) shownNestParentByKey.set(item.key, parentKey);
+    nestPath[depth] = item.key;
+  }
+  const nestedThreadKeys = new Set(shownNestParentByKey.keys());
   // oxlint-disable-next-line t3code/no-unreasoned-state-sync -- cancels the dnd-kit drag sensor when the dragged row leaves the list
   useEffect(() => {
     if (
@@ -2283,16 +2295,40 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
       sectionId,
       folderKey: pinned || inFolder ? (folder?.group.projectKey ?? null) : null,
     };
+    const sourceOrder = sourceThreads.map(threadShellKey);
+    // A nested row stays nested only when it lands inside its parent's group.
+    const parentKey = shownNestParentByKey.get(activeKey);
+    const nestDrop =
+      parentKey === undefined
+        ? null
+        : target.order.includes(parentKey)
+          ? planNestedRowDrop({
+              key: activeKey,
+              parentKey,
+              shownOrder: target.order,
+              storedOrder: sourceOrder,
+              parentKeyOf: (key) => shownNestParentByKey.get(key) ?? null,
+            })
+          : ({ kind: "leave" } as const);
+    const plan = (order: readonly string[]) =>
+      planSidebarArrangeDrop({
+        thread: dragged,
+        target: { container: target.container, order },
+        sourceOrder,
+        pinKeysById: pinnedKeysById,
+        activeKeysById,
+      });
     return {
       target,
       thread: dragged,
-      plan: planSidebarArrangeDrop({
-        thread: dragged,
-        target,
-        sourceOrder: sourceThreads.map(threadShellKey),
-        pinKeysById: pinnedKeysById,
-        activeKeysById,
-      }),
+      nestDrop: nestDrop?.kind ?? null,
+      // Among its siblings it takes their place in the stored order, which nesting keeps.
+      plan:
+        nestDrop?.kind !== "stay"
+          ? plan(target.order)
+          : remoteNestParentByKey.has(activeKey)
+            ? ({ kind: "none" } as const)
+            : plan(nestDrop.order),
     };
   };
   const reportArrangeFailure = (
@@ -2539,19 +2575,25 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
   const unnestsInPlace = (activeKey: string, overId: string) => {
     if (overId === activeKey || !nestedThreadKeys.has(activeKey)) return false;
     const arranged = planArrangeDrop(activeKey, overId);
-    return arranged !== null && dropStaysInOwnList(arranged.thread, arranged.target);
+    return (
+      arranged !== null &&
+      arranged.nestDrop === "leave" &&
+      dropStaysInOwnList(arranged.thread, arranged.target)
+    );
   };
   const arrangeThread = (activeKey: string, overId: string) => {
     const thread = threadByKey.get(activeKey);
-    // It only shows in this list under its launcher, so dropping it anywhere sends it home.
+    const arranged = planArrangeDrop(activeKey, overId);
+    // It only shows in this list under its launcher, so dropping it out of that group sends it
+    // home; its order among its siblings follows its own list, so it cannot be rearranged here.
     if (thread !== undefined && remoteNestOf(activeKey) !== null) {
-      void unnestThread(scopeThreadRef(thread.environmentId, thread.id));
+      if (arranged?.nestDrop !== "stay")
+        void unnestThread(scopeThreadRef(thread.environmentId, thread.id));
       return;
     }
-    const arranged = planArrangeDrop(activeKey, overId);
     if (arranged === null || thread === undefined) return;
     const { plan } = arranged;
-    const unnests = nestedThreadKeys.has(activeKey);
+    const unnests = nestedThreadKeys.has(activeKey) && arranged.nestDrop !== "stay";
     if (plan.kind === "none") {
       if (unnestsInPlace(activeKey, overId) && checkThreadOperations([thread])) {
         void unnestThread(scopeThreadRef(thread.environmentId, thread.id));
@@ -2640,6 +2682,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ? current
           : {
               ...current,
+              nestDrop: arranged?.nestDrop ?? null,
               targetSection:
                 container == null ? null : container.kind === "pinned" ? "pinned" : "active",
               targetSectionId: container?.kind === "pinned" ? container.sectionId : null,
@@ -4141,7 +4184,12 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             }
                             thread={thread}
                             variant={rowVariant}
-                            nestDepth={nest?.depth ?? 0}
+                            nestDepth={
+                              // Dragged out of its parent's group, a nested row shows at full width.
+                              dragState?.activeKey === threadKey && dragState.nestDrop === "leave"
+                                ? 0
+                                : (nest?.depth ?? 0)
+                            }
                             nestedCount={nest?.descendantCount ?? 0}
                             nestCollapsed={nest?.collapsed ?? false}
                             onToggleNest={toggleThreadNest}
@@ -4166,7 +4214,10 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
                             isPinned={thread.pinnedAt != null}
                             dropVerb={
                               dragState?.activeKey === threadKey
-                                ? resolveSidebarDropVerb(dragState.activeSection, dragTargetSection)
+                                ? (resolveSidebarDropVerb(
+                                    dragState.activeSection,
+                                    dragTargetSection,
+                                  ) ?? (dragState.nestDrop === "leave" ? "unnest" : null))
                                 : null
                             }
                             dragOverPinned={

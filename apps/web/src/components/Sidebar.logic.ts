@@ -329,7 +329,7 @@ type SidebarThreadDropPlan =
     }
   | { readonly kind: "settle" };
 
-export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake";
+export type SidebarDropVerb = "pin" | "unpin" | "settle" | "unsettle" | "wake" | "unnest";
 
 export function resolveSidebarDropVerb(
   from: SidebarSection,

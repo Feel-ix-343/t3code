@@ -4950,6 +4950,7 @@
   "87c0f143887e66fb": "Settled",
   "46057a7aacae5167": "Un-settling...",
   "55c0728ebb0b05b1": "Un-settle",
+  "c09ee23b9987e8f9": "Unnest",
   "fd4e45408394aac4": "Woke from snooze",
   "e7f9e31365849b9f": "This provider does not support reverting conversation history. Start a new thread instead.",
   "31db4cf2474ef2a6": "Reconnect {environment} before reverting checkpoints.",

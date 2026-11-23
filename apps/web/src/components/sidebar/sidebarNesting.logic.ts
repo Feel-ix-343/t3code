@@ -94,8 +94,8 @@ export function nestSidebarThreads<T>(
 
 /**
  * Nesting only happens within one list, so each thread `parentKeyOf` names whose parent sits in
- * another list moves to the end of that list, where nesting puts it under the parent. Only lists
- * with `canLeave` give threads up; a moved child's own children follow it.
+ * another list moves to the top of that list, where nesting puts it first under the parent, as
+ * new rows go. Only lists with `canLeave` give threads up; a moved child's own children follow it.
  */
 export function gatherChildrenToParents<T>(
   lists: ReadonlyArray<{ readonly threads: readonly T[]; readonly canLeave: boolean }>,
@@ -127,6 +127,7 @@ export function gatherChildrenToParents<T>(
   result.forEach((threads, index) => {
     for (const thread of threads) leaves.set(options.keyOf(thread), lists[index]!.canLeave);
   });
+  const gatheredCount = result.map(() => 0);
   for (let changed = true; changed;) {
     changed = false;
     for (const [key, parentKey] of parentOf) {
@@ -136,10 +137,61 @@ export function gatherChildrenToParents<T>(
       if (leaves.get(key) !== true || inCycle(key)) continue;
       const index = result[from]!.findIndex((thread) => options.keyOf(thread) === key);
       const [thread] = result[from]!.splice(index, 1);
-      result[to]!.push(thread!);
+      result[to]!.splice(gatheredCount[to]!, 0, thread!);
+      gatheredCount[to]! += 1;
       listOf.set(key, to);
       changed = true;
     }
   }
   return result;
+}
+
+export type NestedRowDrop =
+  /** It stays under its parent; `order` is its list's stored order with it among its siblings. */
+  | { readonly kind: "stay"; readonly order: readonly string[] }
+  /** It lands outside its parent's group, so it stops nesting there. */
+  | { readonly kind: "leave" };
+
+/**
+ * Where a nested row dropped in its own list goes. `shownOrder` is the list as shown with the row
+ * in its new place. Landing after its parent and before the end of the parent's group keeps it
+ * nested, at that place among its siblings; anywhere else, including above the parent, it leaves.
+ */
+export function planNestedRowDrop(input: {
+  readonly key: string;
+  readonly parentKey: string;
+  readonly shownOrder: readonly string[];
+  /** The list's stored order, which nesting keeps among siblings. */
+  readonly storedOrder: readonly string[];
+  /** Each shown row's parent in the list, or null at the top level. */
+  readonly parentKeyOf: (key: string) => string | null;
+}): NestedRowDrop {
+  const { key, parentKey, shownOrder, storedOrder, parentKeyOf } = input;
+  const at = shownOrder.indexOf(key);
+  const parentAt = shownOrder.indexOf(parentKey);
+  if (at === -1 || parentAt === -1 || at < parentAt) return { kind: "leave" };
+  const inGroup = (candidate: string) => {
+    const seen = new Set([candidate]);
+    for (let up = parentKeyOf(candidate); up !== null && !seen.has(up); up = parentKeyOf(up)) {
+      if (up === parentKey) return true;
+      seen.add(up);
+    }
+    return false;
+  };
+  if (!shownOrder.slice(parentAt + 1, at).every(inGroup)) return { kind: "leave" };
+  const stored = storedOrder.filter((candidate) => candidate !== key);
+  const siblings = shownOrder.filter(
+    (candidate) =>
+      candidate !== key && parentKeyOf(candidate) === parentKey && stored.includes(candidate),
+  );
+  const before = siblings.filter((sibling) => shownOrder.indexOf(sibling) < at).length;
+  if (siblings.length === 0 || !storedOrder.includes(key)) {
+    return { kind: "stay", order: storedOrder };
+  }
+  const insertAt =
+    before < siblings.length
+      ? stored.indexOf(siblings[before]!)
+      : stored.indexOf(siblings[before - 1]!) + 1;
+  stored.splice(insertAt, 0, key);
+  return { kind: "stay", order: stored };
 }

@@ -50,6 +50,7 @@ import {
   ClockIcon,
   EllipsisIcon,
   GitBranchIcon,
+  ListIndentDecreaseIcon,
   MessageCircleQuestionIcon,
   PinIcon,
   PinOffIcon,
@@ -557,6 +558,12 @@ const dropVerbBadge: Record<SidebarDropVerb, ReactNode> = {
     <>
       <AlarmClockOffIcon aria-hidden className="size-3" />
       <T>Wake</T>
+    </>
+  ),
+  unnest: (
+    <>
+      <ListIndentDecreaseIcon aria-hidden className="size-3" />
+      <T>Unnest</T>
     </>
   ),
 };

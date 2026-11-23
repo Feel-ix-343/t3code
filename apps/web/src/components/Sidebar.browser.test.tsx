@@ -546,13 +546,14 @@ describe("sidebar nesting", () => {
     await expect.element(screen.getByText("stacking")).toBeInTheDocument();
     const rows = [...screen.container.querySelectorAll<HTMLElement>("[data-thread-item]")];
     const order = rows.map((row) => row.dataset.threadItem!.split(":").slice(1).join(":"));
-    expect(order.indexOf("mcp:launch:remote")).toBe(order.indexOf("parent") + 4);
+    // Launched last, the remote child is the newest, so it heads its parent's children.
+    expect(order.indexOf("mcp:launch:remote")).toBe(order.indexOf("parent") + 1);
     expect(order.slice(order.indexOf("parent"), order.indexOf("parent") + 5)).toEqual([
       "parent",
+      "mcp:launch:remote",
       "child-1",
       "child-2",
       "grandchild",
-      "mcp:launch:remote",
     ]);
     const indentOf = (id: string) =>
       rows

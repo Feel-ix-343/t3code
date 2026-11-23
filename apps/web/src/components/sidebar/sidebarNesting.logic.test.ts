@@ -4,6 +4,7 @@ import { describe, expect, it } from "vite-plus/test";
 import {
   gatherChildrenToParents,
   nestSidebarThreads,
+  planNestedRowDrop,
   sidebarNestParentId,
 } from "./sidebarNesting.logic";
 
@@ -124,7 +125,16 @@ describe("gatherChildrenToParents", () => {
           canLeave: true,
         },
       ]),
-    ).toEqual([["pinned-parent", "child", "grandchild"], ["local"], ["other"]]);
+    ).toEqual([["child", "grandchild", "pinned-parent"], ["local"], ["other"]]);
+  });
+
+  it("puts gathered children at the top of the list, in their own order", () => {
+    expect(
+      gather([
+        { threads: [row("arranged"), row("parent")], canLeave: false },
+        { threads: [row("newer", "parent"), row("older", "parent")], canLeave: true },
+      ]),
+    ).toEqual([["newer", "older", "arranged", "parent"], []]);
   });
 
   it("leaves children in lists that cannot give them up, and cycles in place", () => {
@@ -136,5 +146,46 @@ describe("gatherChildrenToParents", () => {
         { threads: [row("b", "a")], canLeave: true },
       ]),
     ).toEqual([["parent"], ["settled-child"], ["a"], ["b"]]);
+  });
+});
+
+describe("planNestedRowDrop", () => {
+  // Stored order: p, x, a, b, c, y; shown: p, a, b, c (children of p), x, y.
+  const parents: Record<string, string | null> = { a: "p", b: "p", c: "p", g: "a" };
+  const plan = (key: string, shownOrder: readonly string[], storedOrder: readonly string[]) =>
+    planNestedRowDrop({
+      key,
+      parentKey: "p",
+      shownOrder,
+      storedOrder,
+      parentKeyOf: (candidate) => parents[candidate] ?? null,
+    });
+  const stored = ["p", "x", "a", "b", "c", "y"];
+
+  it("reorders a child among its siblings and keeps it nested", () => {
+    expect(plan("c", ["p", "c", "a", "b", "x", "y"], stored)).toEqual({
+      kind: "stay",
+      order: ["p", "x", "c", "a", "b", "y"],
+    });
+    expect(plan("a", ["p", "b", "a", "c", "x", "y"], stored)).toEqual({
+      kind: "stay",
+      order: ["p", "x", "b", "a", "c", "y"],
+    });
+    expect(plan("a", ["p", "b", "c", "a", "x", "y"], stored)).toEqual({
+      kind: "stay",
+      order: ["p", "x", "b", "c", "a", "y"],
+    });
+  });
+
+  it("places a child dropped inside a sibling's own group after that sibling", () => {
+    expect(plan("c", ["p", "a", "c", "g", "b", "x"], ["p", "a", "g", "b", "c", "x"])).toEqual({
+      kind: "stay",
+      order: ["p", "a", "g", "c", "b", "x"],
+    });
+  });
+
+  it("leaves the group above the parent or past the group's end", () => {
+    expect(plan("b", ["b", "p", "a", "c", "x", "y"], stored)).toEqual({ kind: "leave" });
+    expect(plan("b", ["p", "a", "c", "x", "b", "y"], stored)).toEqual({ kind: "leave" });
   });
 });
