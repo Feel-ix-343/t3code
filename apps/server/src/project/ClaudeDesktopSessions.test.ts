@@ -34,6 +34,20 @@ describe("parseClaudeDesktopLineage", () => {
         spawnedFrom: { sessionId: "local_parent" },
         lineageDetached: true,
       }),
+      // Spawned from one session but forked from another: the desktop app shows the fork parent.
+      session({
+        sessionId: "local_stacking",
+        cliSessionId: "cli-stacking",
+        spawnedFrom: { sessionId: "local_parent" },
+        forkedFromSessionId: "local_fork",
+      }),
+      // A fork parent this machine lacks falls back to the spawning session.
+      session({
+        sessionId: "local_fork_gone",
+        cliSessionId: "cli-fork-gone",
+        spawnedFrom: { sessionId: "local_parent" },
+        forkedFromSessionId: "local_gone",
+      }),
       session({
         sessionId: "local_orphan",
         cliSessionId: "cli-orphan",
@@ -46,6 +60,8 @@ describe("parseClaudeDesktopLineage", () => {
       "cli-spawned": { parentSessionId: "cli-parent", sideChat: false },
       "cli-btw": { parentSessionId: "cli-parent", sideChat: true },
       "cli-fork": { parentSessionId: "cli-spawned", sideChat: false },
+      "cli-stacking": { parentSessionId: "cli-fork", sideChat: false },
+      "cli-fork-gone": { parentSessionId: "cli-parent", sideChat: false },
     });
   });
 });

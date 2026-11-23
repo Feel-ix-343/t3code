@@ -43,10 +43,12 @@ export function parseClaudeDesktopLineage(
   for (const session of sessions) {
     // The user detached it from its parent in the desktop app.
     if (session.lineageDetached === true) continue;
-    const parentDesktopId = session.spawnedFrom?.sessionId ?? session.forkedFromSessionId;
-    if (parentDesktopId == null) continue;
-    const parentSessionId = cliSessionIdByDesktopId.get(parentDesktopId);
-    if (parentSessionId === undefined || parentSessionId === session.cliSessionId) continue;
+    // The desktop app shows a session under the one it was forked from when that differs from the
+    // one that spawned it; either may be missing on this machine.
+    const parentSessionId = [session.forkedFromSessionId, session.spawnedFrom?.sessionId]
+      .map((desktopId) => (desktopId == null ? undefined : cliSessionIdByDesktopId.get(desktopId)))
+      .find((cliId) => cliId !== undefined && cliId !== session.cliSessionId);
+    if (parentSessionId === undefined) continue;
     lineage.set(session.cliSessionId, {
       parentSessionId,
       sideChat: session.spawnedFrom?.btw === true,
